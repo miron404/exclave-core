@@ -12,8 +12,8 @@ require (
 	github.com/enfein/mieru/v3 v3.36.0
 	github.com/exclavenetwork/hysteria/core/v2 v2.12.2-1
 	github.com/exclavenetwork/hysteria/extras/v2 v2.12.2-1
-	github.com/exclavenetwork/sing-juicity v0.3.0-beta.1
-	github.com/exclavenetwork/sing-shadowquic v0.0.0-20260801175020-65c7acc31f93
+	github.com/exclavenetwork/sing-juicity v0.3.0-beta.2
+	github.com/exclavenetwork/sing-shadowquic v0.0.0-20260828154517-83f88a9ce329
 	github.com/golang-collections/go-datastructures v0.0.0-20150211160725-59788d5eb259
 	github.com/golang/protobuf v1.5.4
 	github.com/google/go-cmp v0.7.0
@@ -25,7 +25,7 @@ require (
 	github.com/refraction-networking/utls v1.8.3-0.20260802151714-23b1dac19c06
 	github.com/sagernet/sing v0.9.0-beta.4
 	github.com/sagernet/sing-mux v0.3.5
-	github.com/sagernet/sing-quic v0.7.0-beta.3
+	github.com/sagernet/sing-quic v0.7.0-beta.4
 	github.com/sagernet/sing-shadowsocks v0.2.9
 	github.com/sagernet/sing-shadowsocks2 v0.2.2
 	github.com/sagernet/sing-snell v0.0.0-20260824011554-f8ab8029469a
@@ -49,7 +49,7 @@ require (
 )
 
 require (
-	github.com/andybalholm/brotli v1.2.2 // indirect
+	github.com/andybalholm/brotli v1.2.3 // indirect
 	github.com/dgryski/go-metro v0.0.0-20250106013310-edb8663e5e33 // indirect
 	github.com/gofrs/uuid/v5 v5.5.1 // indirect
 	github.com/google/btree v1.1.3 // indirect
@@ -66,7 +66,7 @@ require (
 	github.com/metacubex/randv2 v0.2.1-0.20260726125100-81aa96a9b1a5 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/riobard/go-bloom v0.0.0-20200614022211-cdc8013cb5b3 // indirect
-	github.com/sagernet/quic-go v0.61.0-sing-box-mod.5 // indirect
+	github.com/sagernet/quic-go v0.61.0-sing-box-mod.6 // indirect
 	github.com/sagernet/smux v1.5.50-sing-box-mod.1 // indirect
 	github.com/xtaci/smux v1.5.57 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
