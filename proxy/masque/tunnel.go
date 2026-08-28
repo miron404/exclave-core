@@ -28,6 +28,12 @@ const (
 
 	reconnectDelayMin = 1 * time.Second
 	reconnectDelayMax = 30 * time.Second
+
+	// dialTimeout bounds a full tunnel setup. The CONNECT-IP handshake waits for
+	// the peer's HTTP/3 SETTINGS without a deadline of its own, and keepalives
+	// stop the QUIC connection from ever timing out, so a silent endpoint would
+	// otherwise stall the tunnel forever instead of failing and being retried.
+	dialTimeout = 20 * time.Second
 )
 
 // tunnel owns the userspace network stack that proxied connections are dialed
@@ -140,10 +146,21 @@ func (t *tunnel) maintain(ctx context.Context, o *Outbound, dialer internet.Dial
 			pending, pendingLength = buf, n
 		}
 
-		sess, err := o.dial(ctx, dialer)
+		// The HTTP/2 transport keeps its request open for as long as the tunnel
+		// lives, so the dial context cannot simply be cancelled once the dial
+		// returns; it is handed to the session and released with it. Until then
+		// a timer bounds how long the setup may take.
+		dialCtx, cancelDial := context.WithCancel(ctx)
+		dialTimer := time.AfterFunc(dialTimeout, cancelDial)
+		sess, err := o.dial(dialCtx, dialer)
+		timedOut := !dialTimer.Stop()
 		if err != nil {
+			cancelDial()
 			if ctx.Err() != nil {
 				return
+			}
+			if timedOut {
+				err = newError("timed out after ", dialTimeout).Base(err)
 			}
 			newError("failed to establish the MASQUE tunnel").Base(err).AtWarning().WriteToLog()
 			if sleep(ctx, backoff) != nil {
@@ -152,6 +169,7 @@ func (t *tunnel) maintain(ctx context.Context, o *Outbound, dialer internet.Dial
 			backoff = min(backoff*2, reconnectDelayMax)
 			continue
 		}
+		sess.cancel = cancelDial
 		backoff = reconnectDelayMin
 		connected = true
 		newError("MASQUE tunnel established").AtInfo().WriteToLog()

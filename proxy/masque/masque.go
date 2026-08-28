@@ -154,6 +154,10 @@ func (o *Outbound) quicConfig() *quic.Config {
 // ipSession is one live CONNECT-IP tunnel together with everything that has to be
 // torn down with it.
 type ipSession struct {
+	// cancel releases the context the session was dialed with. The HTTP/2
+	// transport keeps the request alive for the lifetime of the tunnel, so this
+	// must not be called before the session is torn down.
+	cancel        context.CancelFunc
 	ipConn        *connectip.Conn
 	transport     *http3.Transport
 	h2Transport   *http2.Transport
@@ -165,6 +169,9 @@ type ipSession struct {
 func (s *ipSession) Close() {
 	if s == nil {
 		return
+	}
+	if s.cancel != nil {
+		s.cancel()
 	}
 	if s.ipConn != nil {
 		_ = s.ipConn.Close()
@@ -197,8 +204,10 @@ func (o *Outbound) dial(ctx context.Context, dialer internet.Dialer) (*ipSession
 	var sess *ipSession
 	var response *http.Response
 	if o.useHTTP2 {
+		newError("dialing MASQUE endpoint ", o.endpoint(net.Network_TCP).NetAddr(), " over HTTP/2").AtInfo().WriteToLog()
 		sess, response, err = o.dialHTTP2(ctx, dialer, tlsConfig)
 	} else {
+		newError("dialing MASQUE endpoint ", o.endpoint(net.Network_UDP).NetAddr(), " over QUIC").AtInfo().WriteToLog()
 		sess, response, err = o.dialHTTP3(ctx, dialer, tlsConfig)
 	}
 	if err != nil {
@@ -236,6 +245,7 @@ func (o *Outbound) dialHTTP3(ctx context.Context, dialer internet.Dialer, tlsCon
 		// datagram as coming from an unexpected source; report the endpoint.
 		packetConn = &endpointPacketConn{Conn: connWrapper.Conn, endpoint: endpoint}
 	}
+	newError("QUIC socket bound to ", packetConn.LocalAddr()).AtInfo().WriteToLog()
 	// Without an explicit connection ID length the endpoint occasionally
 	// answers with PROTOCOL_VIOLATION and drops the connection.
 	transport := &quic.Transport{Conn: packetConn, ConnectionIDLength: 20}
@@ -245,6 +255,7 @@ func (o *Outbound) dialHTTP3(ctx context.Context, dialer internet.Dialer, tlsCon
 		_ = packetConn.Close()
 		return nil, nil, newError("failed to dial QUIC").Base(err)
 	}
+	newError("QUIC handshake completed, requesting CONNECT-IP").AtInfo().WriteToLog()
 	h3Transport := &http3.Transport{
 		EnableDatagrams: true,
 		AdditionalSettings: map[uint64]uint64{

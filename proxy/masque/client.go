@@ -215,7 +215,11 @@ func (o *Outbound) Process(ctx context.Context, link *transport.Link, dialer int
 		return err
 	}
 
-	newError("tunneling request to ", originalDestination, " via ", o.endpoint(net.Network_Unknown).NetAddr()).
+	transportNetwork := net.Network_UDP
+	if o.useHTTP2 {
+		transportNetwork = net.Network_TCP
+	}
+	newError("tunneling request to ", originalDestination, " via ", o.endpoint(transportNetwork).NetAddr()).
 		WriteToLog(session.ExportIDToError(ctx))
 
 	p := o.policyManager.ForLevel(0)
