@@ -111,3 +111,33 @@ func TestSettingsArriveOverSelfDialedTransport(t *testing.T) {
 		t.Fatal("SETTINGS never arrived")
 	}
 }
+
+func TestNextHopMTU(t *testing.T) {
+	ipv4 := make([]byte, 28)
+	ipv4[0] = 4 << 4
+	ipv4[20] = 3 // destination unreachable
+	ipv4[21] = 4 // fragmentation needed
+	ipv4[26], ipv4[27] = 0x04, 0xd2
+	if got := nextHopMTU(ipv4); got != 1234 {
+		t.Errorf("IPv4: got %d, want 1234", got)
+	}
+
+	ipv6 := make([]byte, 48)
+	ipv6[0] = 6 << 4
+	ipv6[40] = 2 // packet too big
+	ipv6[47] = 0xd2
+	ipv6[46] = 0x04
+	if got := nextHopMTU(ipv6); got != 1234 {
+		t.Errorf("IPv6: got %d, want 1234", got)
+	}
+
+	for name, packet := range map[string][]byte{
+		"empty":           nil,
+		"short":           make([]byte, 8),
+		"other ICMP type": append([]byte{4 << 4}, make([]byte, 27)...),
+	} {
+		if got := nextHopMTU(packet); got != 0 {
+			t.Errorf("%s: got %d, want 0", name, got)
+		}
+	}
+}

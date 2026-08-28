@@ -146,6 +146,39 @@ func (o *Outbound) getTunnel(ctx context.Context, dialer internet.Dialer) (*tunn
 	return t, nil
 }
 
+// lowerMTU records that the path cannot carry packets of the current size and
+// rebuilds the tunnel at one that fits. The netstack decides its segment sizes
+// from the device MTU, so this is the only setting every flow honours; the
+// ICMP answer alone leaves anything that ignores it stuck.
+//
+// The size only ever decreases, so this settles after at most a few rounds.
+func (o *Outbound) lowerMTU(mtu int) {
+	if mtu < minimumTunnelMTU {
+		return
+	}
+	o.tunnelAccess.Lock()
+	if mtu >= o.mtu {
+		o.tunnelAccess.Unlock()
+		return
+	}
+	previous := o.mtu
+	o.mtu = mtu
+	t := o.tunnel
+	o.tunnel = nil
+	o.tunnelAccess.Unlock()
+
+	newError("rebuilding the tunnel with an MTU of ", mtu, ", was ", previous).AtWarning().WriteToLog()
+	if mtu < minimumIPv6MTU {
+		newError("IPv6 inside the tunnel needs an MTU of at least ", minimumIPv6MTU,
+			" and is disabled on this path").AtWarning().WriteToLog()
+	}
+	if t != nil {
+		go func() {
+			_ = t.Close()
+		}()
+	}
+}
+
 // InterfaceUpdate drops the tunnel when the underlying network changes, so the
 // next request rebuilds it over the new interface.
 func (o *Outbound) InterfaceUpdate() {

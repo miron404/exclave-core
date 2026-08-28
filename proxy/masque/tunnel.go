@@ -2,6 +2,7 @@ package masque
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"net/netip"
 	"sync"
@@ -26,6 +27,14 @@ const (
 	// readMutex serializes it against the next cycle.
 	pumpShutdownGrace = 2 * time.Second
 
+	// minimumTunnelMTU is the floor for automatic MTU reduction: below the
+	// IPv4 minimum reassembly buffer the tunnel is not worth keeping.
+	minimumTunnelMTU = 576
+
+	// minimumIPv6MTU is the smallest link an IPv6 stack will operate on; below
+	// it the netstack refuses to send IPv6 at all.
+	minimumIPv6MTU = 1280
+
 	reconnectDelayMin = 1 * time.Second
 	reconnectDelayMax = 30 * time.Second
 
@@ -43,11 +52,12 @@ const (
 // stays alive, so in-flight connections survive short outages instead of being
 // reset.
 type tunnel struct {
-	device wgtun.Device
-	net    *netstack.Net
-	mtu    int
-	cancel context.CancelFunc
-	done   chan struct{}
+	outbound *Outbound
+	device   wgtun.Device
+	net      *netstack.Net
+	mtu      int
+	cancel   context.CancelFunc
+	done     chan struct{}
 
 	// readMutex serializes device reads across reconnect cycles.
 	readMutex sync.Mutex
@@ -59,17 +69,33 @@ type tunnel struct {
 }
 
 func newTunnel(ctx context.Context, o *Outbound, dialer internet.Dialer) (*tunnel, error) {
-	device, netStack, _, err := netstack.CreateNetTUN(o.localAddresses, o.mtu, false)
+	addresses := o.localAddresses
+	if o.mtu < minimumIPv6MTU {
+		// The stack rejects a link this small for IPv6, and would then fail to
+		// come up at all, so those addresses are left off.
+		addresses = make([]netip.Addr, 0, len(o.localAddresses))
+		for _, address := range o.localAddresses {
+			if address.Is4() {
+				addresses = append(addresses, address)
+			}
+		}
+		if len(addresses) == 0 {
+			return nil, newError("the path only allows an MTU of ", o.mtu,
+				", which cannot carry the IPv6 only addresses assigned to this device")
+		}
+	}
+	device, netStack, _, err := netstack.CreateNetTUN(addresses, o.mtu, false)
 	if err != nil {
 		return nil, newError("failed to create virtual network stack").Base(err)
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	t := &tunnel{
-		device: device,
-		net:    netStack,
-		mtu:    o.mtu,
-		cancel: cancel,
-		done:   make(chan struct{}),
+		outbound: o,
+		device:   device,
+		net:      netStack,
+		mtu:      o.mtu,
+		cancel:   cancel,
+		done:     make(chan struct{}),
 	}
 	go func() {
 		defer close(t.done)
@@ -244,10 +270,11 @@ func (t *tunnel) pumpToTunnel(ctx context.Context, sess *ipSession, bufferPool *
 			continue
 		}
 		if len(icmp) > 0 {
-			// The packet did not fit a datagram on this path. The tunnel
-			// answers with an ICMP "packet too big" carrying the size that
-			// does fit, which makes the stack shrink that flow's segments.
-			t.reportOversizedPacket(n)
+			// The packet did not fit a datagram on this path. The answer is an
+			// ICMP "packet too big" naming the size that does fit, which makes
+			// the stack shrink that one flow. That only helps flows that honour
+			// it, so the size is also remembered for the tunnel as a whole.
+			t.reportOversizedPacket(n, nextHopMTU(icmp))
 			if err := t.writePacket(icmp); err != nil {
 				return err
 			}
@@ -283,13 +310,30 @@ func (t *tunnel) reportDroppedPacket(size int, err error) {
 }
 
 // reportOversizedPacket records that the path cannot carry packets the size of
-// the tunnel's MTU. Traffic still works, at the cost of one retransmit per
-// flow. Lowering the MTU avoids that, but below 1280 the stack drops IPv6.
-func (t *tunnel) reportOversizedPacket(size int) {
+// the tunnel's MTU, and asks the outbound to rebuild the tunnel at a size that
+// fits. Relying on the ICMP answer alone leaves every flow that ignores it
+// stuck retransmitting a packet that can never be delivered.
+func (t *tunnel) reportOversizedPacket(size, fits int) {
 	t.oversizedReported.Do(func() {
-		newError("a packet of ", size, " bytes does not fit a QUIC datagram on this path;",
-			" asking the stack to send smaller ones").AtWarning().WriteToLog()
+		newError("a packet of ", size, " bytes does not fit a QUIC datagram on this path,",
+			" which carries at most ", fits).AtWarning().WriteToLog()
 	})
+	if fits > 0 {
+		t.outbound.lowerMTU(fits)
+	}
+}
+
+// nextHopMTU reads the size advertised by an ICMP "packet too big" answer.
+func nextHopMTU(packet []byte) int {
+	switch {
+	case len(packet) >= 28 && packet[0]>>4 == 4 && packet[20] == 3 && packet[21] == 4:
+		// IPv4 header, then ICMP destination unreachable, fragmentation needed.
+		return int(binary.BigEndian.Uint16(packet[26:28]))
+	case len(packet) >= 48 && packet[0]>>4 == 6 && packet[40] == 2:
+		// IPv6 header, then ICMPv6 packet too big.
+		return int(binary.BigEndian.Uint32(packet[44:48]))
+	}
+	return 0
 }
 
 func waitPumps(wg *sync.WaitGroup) {
