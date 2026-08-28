@@ -49,8 +49,8 @@ const (
 	clientCertValidity = 24 * time.Hour
 )
 
-// accessDeniedError reports an endpoint that rejected the enrolled key.
-var accessDeniedHint = "login failed: the TLS key and certificate are not enrolled with the endpoint"
+// accessDeniedHint explains the endpoint rejecting the enrolled key.
+const accessDeniedHint = "login failed: the TLS key and certificate are not enrolled with the endpoint"
 
 func parsePrivateKey(encoded string) (*ecdsa.PrivateKey, error) {
 	der, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encoded))
@@ -154,10 +154,11 @@ func (o *Outbound) quicConfig() *quic.Config {
 // ipSession is one live CONNECT-IP tunnel together with everything that has to be
 // torn down with it.
 type ipSession struct {
-	ipConn     *connectip.Conn
-	transport  *http3.Transport
-	quicConn   *quic.Conn
-	packetConn gonet.PacketConn
+	ipConn      *connectip.Conn
+	transport   *http3.Transport
+	h2Transport *http2.Transport
+	quicConn    *quic.Conn
+	packetConn  gonet.PacketConn
 }
 
 func (s *ipSession) Close() {
@@ -169,6 +170,11 @@ func (s *ipSession) Close() {
 	}
 	if s.transport != nil {
 		_ = s.transport.Close()
+	}
+	if s.h2Transport != nil {
+		// The tunnel owns its transport, so dropping the pooled TCP connection
+		// here keeps a reconnect from leaking the previous one.
+		s.h2Transport.CloseIdleConnections()
 	}
 	if s.quicConn != nil {
 		_ = s.quicConn.CloseWithError(0, "")
@@ -264,7 +270,7 @@ func (o *Outbound) dialHTTP2(ctx context.Context, dialer internet.Dialer, tlsCon
 	destination := o.endpoint(net.Network_TCP)
 	h2TLSConfig := tlsConfig.Clone()
 	h2TLSConfig.NextProtos = []string{"h2"}
-	client := &http.Client{Transport: &http2.Transport{
+	transport := &http2.Transport{
 		DisableCompression: true,
 		DialTLSContext: func(ctx context.Context, _, _ string, _ *tls.Config) (gonet.Conn, error) {
 			conn, err := dialer.Dial(ctx, destination)
@@ -278,7 +284,8 @@ func (o *Outbound) dialHTTP2(ctx context.Context, dialer internet.Dialer, tlsCon
 			}
 			return tlsConn, nil
 		},
-	}}
+	}
+	client := &http.Client{Transport: transport}
 	ipConn, response, err := connectip.DialH2(ctx, client, uritemplate.MustNew(connectURI), http.Header{
 		"User-Agent":       []string{""},
 		"cf-connect-proto": []string{requestProtocol},
@@ -286,7 +293,8 @@ func (o *Outbound) dialHTTP2(ctx context.Context, dialer internet.Dialer, tlsCon
 		"pq-enabled": []string{"false"},
 	})
 	if err != nil {
+		transport.CloseIdleConnections()
 		return nil, nil, newError("failed to dial connect-ip over HTTP/2").Base(err)
 	}
-	return &ipSession{ipConn: ipConn}, response, nil
+	return &ipSession{ipConn: ipConn, h2Transport: transport}, response, nil
 }

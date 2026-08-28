@@ -222,7 +222,11 @@ func (o *Outbound) Process(ctx context.Context, link *transport.Link, dialer int
 	ctx, cancel := context.WithCancel(ctx)
 	timer := signal.CancelAfterInactivity(ctx, cancel, p.Timeouts.ConnectionIdle)
 
-	addrPort := netip.AddrPortFrom(toNetIPAddr(destination.Address), destination.Port.Value())
+	address := toNetIPAddr(destination.Address)
+	if !address.IsValid() {
+		return newError("cannot route ", destination.Address, " through the tunnel")
+	}
+	addrPort := netip.AddrPortFrom(address, destination.Port.Value())
 	var requestFunc func() error
 	var responseFunc func() error
 
