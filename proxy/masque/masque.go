@@ -154,11 +154,12 @@ func (o *Outbound) quicConfig() *quic.Config {
 // ipSession is one live CONNECT-IP tunnel together with everything that has to be
 // torn down with it.
 type ipSession struct {
-	ipConn      *connectip.Conn
-	transport   *http3.Transport
-	h2Transport *http2.Transport
-	quicConn    *quic.Conn
-	packetConn  gonet.PacketConn
+	ipConn        *connectip.Conn
+	transport     *http3.Transport
+	h2Transport   *http2.Transport
+	quicConn      *quic.Conn
+	quicTransport *quic.Transport
+	packetConn    gonet.PacketConn
 }
 
 func (s *ipSession) Close() {
@@ -178,6 +179,9 @@ func (s *ipSession) Close() {
 	}
 	if s.quicConn != nil {
 		_ = s.quicConn.CloseWithError(0, "")
+	}
+	if s.quicTransport != nil {
+		_ = s.quicTransport.Close()
 	}
 	if s.packetConn != nil {
 		_ = s.packetConn.Close()
@@ -218,18 +222,26 @@ func (o *Outbound) dialHTTP3(ctx context.Context, dialer internet.Dialer, tlsCon
 	if !destination.Address.Family().IsIP() {
 		return nil, nil, newError("QUIC mode needs an IP endpoint, got ", destination.Address)
 	}
+	endpoint := &gonet.UDPAddr{
+		IP:   destination.Address.IP(),
+		Port: int(destination.Port),
+	}
 	packetConn, err := singbridge.NewDialerWrapper(dialer).ListenPacket(ctx, singbridge.ToSocksAddr(destination))
 	if err != nil {
 		return nil, nil, newError("failed to listen packet").Base(err)
 	}
+	if connWrapper, ok := packetConn.(*internet.ConnWrapper); ok {
+		// Not a real UDP socket, which is what a chained outbound hands back.
+		// Its RemoteAddr is a placeholder, so quic-go would discard every
+		// datagram as coming from an unexpected source; report the endpoint.
+		packetConn = &endpointPacketConn{Conn: connWrapper.Conn, endpoint: endpoint}
+	}
 	// Without an explicit connection ID length the endpoint occasionally
 	// answers with PROTOCOL_VIOLATION and drops the connection.
 	transport := &quic.Transport{Conn: packetConn, ConnectionIDLength: 20}
-	quicConn, err := transport.Dial(ctx, &gonet.UDPAddr{
-		IP:   destination.Address.IP(),
-		Port: int(destination.Port),
-	}, tlsConfig, o.quicConfig())
+	quicConn, err := transport.Dial(ctx, endpoint, tlsConfig, o.quicConfig())
 	if err != nil {
+		_ = transport.Close()
 		_ = packetConn.Close()
 		return nil, nil, newError("failed to dial QUIC").Base(err)
 	}
@@ -253,14 +265,16 @@ func (o *Outbound) dialHTTP3(ctx context.Context, dialer internet.Dialer, tlsCon
 	if err != nil {
 		_ = h3Transport.Close()
 		_ = quicConn.CloseWithError(0, "connect-ip dial failed")
+		_ = transport.Close()
 		_ = packetConn.Close()
 		return nil, nil, newError("failed to dial connect-ip").Base(err)
 	}
 	return &ipSession{
-		ipConn:     ipConn,
-		transport:  h3Transport,
-		quicConn:   quicConn,
-		packetConn: packetConn,
+		ipConn:        ipConn,
+		transport:     h3Transport,
+		quicConn:      quicConn,
+		quicTransport: transport,
+		packetConn:    packetConn,
 	}, response, nil
 }
 
@@ -297,4 +311,21 @@ func (o *Outbound) dialHTTP2(ctx context.Context, dialer internet.Dialer, tlsCon
 		return nil, nil, newError("failed to dial connect-ip over HTTP/2").Base(err)
 	}
 	return &ipSession{ipConn: ipConn, h2Transport: transport}, response, nil
+}
+
+// endpointPacketConn presents a stream shaped connection as the net.PacketConn
+// quic-go expects. Every datagram is sent to, and reported as coming from, the
+// single endpoint the tunnel dialed.
+type endpointPacketConn struct {
+	gonet.Conn
+	endpoint gonet.Addr
+}
+
+func (c *endpointPacketConn) ReadFrom(p []byte) (int, gonet.Addr, error) {
+	n, err := c.Read(p)
+	return n, c.endpoint, err
+}
+
+func (c *endpointPacketConn) WriteTo(p []byte, _ gonet.Addr) (int, error) {
+	return c.Write(p)
 }
