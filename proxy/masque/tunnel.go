@@ -35,6 +35,12 @@ const (
 	// it the netstack refuses to send IPv6 at all.
 	minimumIPv6MTU = 1280
 
+	// pathMTUGrace is how long a connection that can discover the path MTU is
+	// given to grow its packets before the tunnel is resized instead. Discovery
+	// starts at the initial packet size, so the first full size packets can be
+	// refused before it has had a chance to probe.
+	pathMTUGrace = 20 * time.Second
+
 	reconnectDelayMin = 1 * time.Second
 	reconnectDelayMax = 30 * time.Second
 
@@ -216,9 +222,13 @@ func (t *tunnel) maintain(ctx context.Context, o *Outbound, dialer internet.Dial
 		pumpCtx, cancelPumps := context.WithCancel(ctx)
 		var wg sync.WaitGroup
 		wg.Add(2)
+		resizeAfter := time.Now()
+		if sess.canDiscoverPathMTU {
+			resizeAfter = resizeAfter.Add(pathMTUGrace)
+		}
 		go func() {
 			defer wg.Done()
-			errChan <- t.pumpToTunnel(pumpCtx, sess, &bufferPool)
+			errChan <- t.pumpToTunnel(pumpCtx, sess, &bufferPool, resizeAfter)
 		}()
 		go func() {
 			defer wg.Done()
@@ -241,7 +251,7 @@ func (t *tunnel) maintain(ctx context.Context, o *Outbound, dialer internet.Dial
 
 // pumpToTunnel forwards packets from the stack into the CONNECT-IP session and
 // injects any ICMP error the session generates back into the stack.
-func (t *tunnel) pumpToTunnel(ctx context.Context, sess *ipSession, bufferPool *sync.Pool) error {
+func (t *tunnel) pumpToTunnel(ctx context.Context, sess *ipSession, bufferPool *sync.Pool, resizeAfter time.Time) error {
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -274,7 +284,7 @@ func (t *tunnel) pumpToTunnel(ctx context.Context, sess *ipSession, bufferPool *
 			// ICMP "packet too big" naming the size that does fit, which makes
 			// the stack shrink that one flow. That only helps flows that honour
 			// it, so the size is also remembered for the tunnel as a whole.
-			t.reportOversizedPacket(n, nextHopMTU(icmp))
+			t.reportOversizedPacket(n, nextHopMTU(icmp), resizeAfter)
 			if err := t.writePacket(icmp); err != nil {
 				return err
 			}
@@ -313,12 +323,14 @@ func (t *tunnel) reportDroppedPacket(size int, err error) {
 // the tunnel's MTU, and asks the outbound to rebuild the tunnel at a size that
 // fits. Relying on the ICMP answer alone leaves every flow that ignores it
 // stuck retransmitting a packet that can never be delivered.
-func (t *tunnel) reportOversizedPacket(size, fits int) {
+func (t *tunnel) reportOversizedPacket(size, fits int, resizeAfter time.Time) {
 	t.oversizedReported.Do(func() {
 		newError("a packet of ", size, " bytes does not fit a QUIC datagram on this path,",
 			" which carries at most ", fits).AtWarning().WriteToLog()
 	})
-	if fits > 0 {
+	// While the connection is still growing its packets this is expected and
+	// passes on its own; the ICMP answer covers the flows meanwhile.
+	if fits > 0 && !time.Now().Before(resizeAfter) {
 		t.outbound.lowerMTU(fits)
 	}
 }

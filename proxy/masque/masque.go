@@ -29,7 +29,6 @@ import (
 	"golang.org/x/net/http2"
 
 	"github.com/exclavenetwork/exclave-core/v5/common/net"
-	"github.com/exclavenetwork/exclave-core/v5/common/singbridge"
 	"github.com/exclavenetwork/exclave-core/v5/transport/internet"
 )
 
@@ -154,6 +153,10 @@ func (o *Outbound) quicConfig() *quic.Config {
 // ipSession is one live CONNECT-IP tunnel together with everything that has to be
 // torn down with it.
 type ipSession struct {
+	// canDiscoverPathMTU reports whether the connection can grow its packets
+	// beyond the initial size. When it cannot, a packet that does not fit will
+	// never fit, and the tunnel has to be resized instead of waiting.
+	canDiscoverPathMTU bool
 	// cancel releases the context the session was dialed with. The HTTP/2
 	// transport keeps the request alive for the lifetime of the tunnel, so this
 	// must not be called before the session is torn down.
@@ -235,17 +238,12 @@ func (o *Outbound) dialHTTP3(ctx context.Context, dialer internet.Dialer, tlsCon
 		IP:   destination.Address.IP(),
 		Port: int(destination.Port),
 	}
-	packetConn, err := singbridge.NewDialerWrapper(dialer).ListenPacket(ctx, singbridge.ToSocksAddr(destination))
+	packetConn, canDiscoverPathMTU, err := listenPacket(ctx, dialer, destination, endpoint)
 	if err != nil {
 		return nil, nil, newError("failed to listen packet").Base(err)
 	}
-	if connWrapper, ok := packetConn.(*internet.ConnWrapper); ok {
-		// Not a real UDP socket, which is what a chained outbound hands back.
-		// Its RemoteAddr is a placeholder, so quic-go would discard every
-		// datagram as coming from an unexpected source; report the endpoint.
-		packetConn = &endpointPacketConn{Conn: connWrapper.Conn, endpoint: endpoint}
-	}
-	newError("QUIC socket bound to ", packetConn.LocalAddr()).AtInfo().WriteToLog()
+	newError("QUIC socket bound to ", packetConn.LocalAddr(),
+		", path MTU discovery: ", canDiscoverPathMTU).AtInfo().WriteToLog()
 	// Without an explicit connection ID length the endpoint occasionally
 	// answers with PROTOCOL_VIOLATION and drops the connection.
 	transport := &quic.Transport{Conn: packetConn, ConnectionIDLength: 20}
@@ -281,11 +279,12 @@ func (o *Outbound) dialHTTP3(ctx context.Context, dialer internet.Dialer, tlsCon
 		return nil, nil, newError("failed to dial connect-ip").Base(err)
 	}
 	return &ipSession{
-		ipConn:        ipConn,
-		transport:     h3Transport,
-		quicConn:      quicConn,
-		quicTransport: transport,
-		packetConn:    packetConn,
+		canDiscoverPathMTU: canDiscoverPathMTU,
+		ipConn:             ipConn,
+		transport:          h3Transport,
+		quicConn:           quicConn,
+		quicTransport:      transport,
+		packetConn:         packetConn,
 	}, response, nil
 }
 
