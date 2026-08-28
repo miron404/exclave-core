@@ -8,7 +8,6 @@ import (
 	"time"
 
 	connectip "github.com/miron404/connect-ip-go"
-	"github.com/quic-go/quic-go"
 	wgtun "golang.zx2c4.com/wireguard/tun"
 
 	"github.com/exclavenetwork/exclave-core/v5/common/net"
@@ -53,8 +52,10 @@ type tunnel struct {
 	// readMutex serializes device reads across reconnect cycles.
 	readMutex sync.Mutex
 
-	// dropReported keeps a packet the tunnel cannot carry from filling the log.
-	dropReported sync.Once
+	// Each of these reports once, so a condition that repeats per packet does
+	// not fill the log.
+	dropReported      sync.Once
+	oversizedReported sync.Once
 }
 
 func newTunnel(ctx context.Context, o *Outbound, dialer internet.Dialer) (*tunnel, error) {
@@ -243,6 +244,10 @@ func (t *tunnel) pumpToTunnel(ctx context.Context, sess *ipSession, bufferPool *
 			continue
 		}
 		if len(icmp) > 0 {
+			// The packet did not fit a datagram on this path. The tunnel
+			// answers with an ICMP "packet too big" carrying the size that
+			// does fit, which makes the stack shrink that flow's segments.
+			t.reportOversizedPacket(n)
 			if err := t.writePacket(icmp); err != nil {
 				return err
 			}
@@ -273,15 +278,17 @@ func (t *tunnel) pumpFromTunnel(sess *ipSession, useHTTP2 bool) error {
 // reportDroppedPacket explains the first packet the tunnel refused to carry.
 func (t *tunnel) reportDroppedPacket(size int, err error) {
 	t.dropReported.Do(func() {
-		var tooLarge *quic.DatagramTooLargeError
-		if errors.As(err, &tooLarge) {
-			newError("dropping packets that do not fit the tunnel: ", size,
-				" bytes to send, at most ", tooLarge.MaxDatagramPayloadSize-datagramContextIDHeadroom,
-				" fit a QUIC datagram on this path. Small exchanges still work, larger ones stall.",
-				" Lower the profile MTU to that value or less.").AtWarning().WriteToLog()
-			return
-		}
 		newError("dropping a packet of ", size, " bytes").Base(err).AtWarning().WriteToLog()
+	})
+}
+
+// reportOversizedPacket records that the path cannot carry packets the size of
+// the tunnel's MTU. Traffic still works, at the cost of one retransmit per
+// flow. Lowering the MTU avoids that, but below 1280 the stack drops IPv6.
+func (t *tunnel) reportOversizedPacket(size int) {
+	t.oversizedReported.Do(func() {
+		newError("a packet of ", size, " bytes does not fit a QUIC datagram on this path;",
+			" asking the stack to send smaller ones").AtWarning().WriteToLog()
 	})
 }
 

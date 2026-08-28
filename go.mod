@@ -20,7 +20,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/metacubex/utls v1.8.7
 	github.com/miekg/dns v1.1.73
-	github.com/miron404/connect-ip-go v0.0.0-20260828212855-30b3cfe52fb9
+	github.com/miron404/connect-ip-go v0.0.0-20260828231553-a6b34803dbe5
 	github.com/pires/go-proxyproto v0.15.0
 	github.com/quic-go/quic-go v0.61.0
 	github.com/refraction-networking/utls v1.8.3-0.20260802151714-23b1dac19c06
