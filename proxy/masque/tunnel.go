@@ -8,6 +8,7 @@ import (
 	"time"
 
 	connectip "github.com/miron404/connect-ip-go"
+	"github.com/quic-go/quic-go"
 	wgtun "golang.zx2c4.com/wireguard/tun"
 
 	"github.com/exclavenetwork/exclave-core/v5/common/net"
@@ -51,6 +52,9 @@ type tunnel struct {
 
 	// readMutex serializes device reads across reconnect cycles.
 	readMutex sync.Mutex
+
+	// dropReported keeps a packet the tunnel cannot carry from filling the log.
+	dropReported sync.Once
 }
 
 func newTunnel(ctx context.Context, o *Outbound, dialer internet.Dialer) (*tunnel, error) {
@@ -231,9 +235,11 @@ func (t *tunnel) pumpToTunnel(ctx context.Context, sess *ipSession, bufferPool *
 			if errors.As(err, new(*connectip.CloseError)) {
 				return err
 			}
-			// A single rejected packet (oversized, unroutable source) must not
-			// take the tunnel down.
-			newError("failed to write to the tunnel").Base(err).AtDebug().WriteToLog()
+			// A single rejected packet must not take the tunnel down, but it is
+			// worth saying why once: a packet that never fits is an MTU that is
+			// too high for the path, and it stalls everything except the
+			// smallest exchanges.
+			t.reportDroppedPacket(n, err)
 			continue
 		}
 		if len(icmp) > 0 {
@@ -262,6 +268,21 @@ func (t *tunnel) pumpFromTunnel(sess *ipSession, useHTTP2 bool) error {
 			return err
 		}
 	}
+}
+
+// reportDroppedPacket explains the first packet the tunnel refused to carry.
+func (t *tunnel) reportDroppedPacket(size int, err error) {
+	t.dropReported.Do(func() {
+		var tooLarge *quic.DatagramTooLargeError
+		if errors.As(err, &tooLarge) {
+			newError("dropping packets that do not fit the tunnel: ", size,
+				" bytes to send, at most ", tooLarge.MaxDatagramPayloadSize-datagramContextIDHeadroom,
+				" fit a QUIC datagram on this path. Small exchanges still work, larger ones stall.",
+				" Lower the profile MTU to that value or less.").AtWarning().WriteToLog()
+			return
+		}
+		newError("dropping a packet of ", size, " bytes").Base(err).AtWarning().WriteToLog()
+	})
 }
 
 func waitPumps(wg *sync.WaitGroup) {
