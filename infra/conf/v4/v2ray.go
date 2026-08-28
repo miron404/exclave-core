@@ -65,6 +65,7 @@ var (
 		"snell":            func() interface{} { return new(SnellClientConfig) },
 		"trusttunnel":      func() interface{} { return new(TrustTunnelClientConfig) },
 		"shadowquic":       func() interface{} { return new(ShadowQUICClientConfig) },
+		"masque":           func() interface{} { return new(MasqueClientConfig) },
 	}, "protocol", "settings")
 )
 

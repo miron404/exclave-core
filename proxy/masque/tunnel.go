@@ -1,0 +1,271 @@
+package masque
+
+import (
+	"context"
+	"errors"
+	"net/netip"
+	"sync"
+	"time"
+
+	connectip "github.com/miron404/connect-ip-go"
+	wgtun "golang.zx2c4.com/wireguard/tun"
+
+	"github.com/exclavenetwork/exclave-core/v5/common/net"
+	"github.com/exclavenetwork/exclave-core/v5/proxy/wireguard/netstack"
+	"github.com/exclavenetwork/exclave-core/v5/transport/internet"
+)
+
+const (
+	// CONNECT-IP context ID 0 is encoded as a single byte QUIC varint.
+	// Reserving that byte in front of every packet lets connect-ip-go build
+	// outgoing datagrams without copying.
+	datagramContextIDHeadroom = 1
+
+	// pumpShutdownGrace bounds how long a reconnect waits for the previous
+	// pumps to exit. A device reader may still be parked in a blocking read;
+	// readMutex serializes it against the next cycle.
+	pumpShutdownGrace = 2 * time.Second
+
+	reconnectDelayMin = 1 * time.Second
+	reconnectDelayMax = 30 * time.Second
+)
+
+// tunnel owns the userspace network stack that proxied connections are dialed
+// on, plus the goroutine keeping a CONNECT-IP session attached to it.
+//
+// The session is re-established on failure. While no session is up the stack
+// stays alive, so in-flight connections survive short outages instead of being
+// reset.
+type tunnel struct {
+	device wgtun.Device
+	net    *netstack.Net
+	mtu    int
+	cancel context.CancelFunc
+	done   chan struct{}
+
+	// readMutex serializes device reads across reconnect cycles.
+	readMutex sync.Mutex
+}
+
+func newTunnel(ctx context.Context, o *Outbound, dialer internet.Dialer) (*tunnel, error) {
+	device, netStack, _, err := netstack.CreateNetTUN(o.localAddresses, o.mtu, false)
+	if err != nil {
+		return nil, newError("failed to create virtual network stack").Base(err)
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	t := &tunnel{
+		device: device,
+		net:    netStack,
+		mtu:    o.mtu,
+		cancel: cancel,
+		done:   make(chan struct{}),
+	}
+	go func() {
+		defer close(t.done)
+		t.maintain(runCtx, o, dialer)
+	}()
+	return t, nil
+}
+
+func (t *tunnel) Close() error {
+	t.cancel()
+	err := t.device.Close()
+	<-t.done
+	return err
+}
+
+func (t *tunnel) DialContextTCPAddrPort(ctx context.Context, addr netip.AddrPort) (net.Conn, error) {
+	return t.net.DialContextTCPAddrPort(ctx, addr)
+}
+
+func (t *tunnel) DialUDPAddrPort(laddr, raddr netip.AddrPort) (net.Conn, error) {
+	return t.net.DialUDPAddrPort(laddr, raddr)
+}
+
+// readPacket reads one packet from the stack into a buffer that already has
+// room for the datagram context ID. It returns the full buffer and the packet
+// length.
+func (t *tunnel) readPacket(buf []byte) (int, error) {
+	buffers := [][]byte{buf[datagramContextIDHeadroom:]}
+	sizes := []int{0}
+	t.readMutex.Lock()
+	_, err := t.device.Read(buffers, sizes, 0)
+	t.readMutex.Unlock()
+	if err != nil {
+		return 0, err
+	}
+	return sizes[0], nil
+}
+
+func (t *tunnel) writePacket(packet []byte) error {
+	_, err := t.device.Write([][]byte{packet}, 0)
+	return err
+}
+
+// maintain keeps a CONNECT-IP session attached to the stack, reconnecting on
+// failure with a capped exponential backoff.
+//
+// After the first session is lost the supervisor parks on a device read until
+// something inside the stack actually wants to send. That keeps a tunnel that
+// broke while idle from redialing in a loop, and the packet that woke it up is
+// carried over into the new session instead of being dropped.
+func (t *tunnel) maintain(ctx context.Context, o *Outbound, dialer internet.Dialer) {
+	bufferPool := sync.Pool{New: func() any {
+		buf := make([]byte, t.mtu+datagramContextIDHeadroom)
+		return &buf
+	}}
+	backoff := reconnectDelayMin
+	connected := false
+	var pending []byte
+	var pendingLength int
+
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+
+		if connected && pending == nil {
+			buf := make([]byte, t.mtu+datagramContextIDHeadroom)
+			n, err := t.readPacket(buf)
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				newError("failed to read from the virtual network stack").Base(err).AtWarning().WriteToLog()
+				if sleep(ctx, backoff) != nil {
+					return
+				}
+				continue
+			}
+			pending, pendingLength = buf, n
+		}
+
+		sess, err := o.dial(ctx, dialer)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			newError("failed to establish the MASQUE tunnel").Base(err).AtWarning().WriteToLog()
+			if sleep(ctx, backoff) != nil {
+				return
+			}
+			backoff = min(backoff*2, reconnectDelayMax)
+			continue
+		}
+		backoff = reconnectDelayMin
+		connected = true
+		newError("MASQUE tunnel established").AtInfo().WriteToLog()
+
+		if pending != nil {
+			if _, err := sess.ipConn.WritePacketBuffer(pending, datagramContextIDHeadroom, pendingLength); err != nil {
+				newError("failed to send the first packet").Base(err).AtDebug().WriteToLog()
+			}
+			pending, pendingLength = nil, 0
+		}
+
+		errChan := make(chan error, 2)
+		pumpCtx, cancelPumps := context.WithCancel(ctx)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			errChan <- t.pumpToTunnel(pumpCtx, sess, &bufferPool)
+		}()
+		go func() {
+			defer wg.Done()
+			errChan <- t.pumpFromTunnel(sess, o.useHTTP2)
+		}()
+
+		err = <-errChan
+		if ctx.Err() != nil {
+			cancelPumps()
+			sess.Close()
+			return
+		}
+		newError("MASQUE tunnel lost, reconnecting").Base(err).AtInfo().WriteToLog()
+
+		cancelPumps()
+		sess.Close()
+		waitPumps(&wg)
+	}
+}
+
+// pumpToTunnel forwards packets from the stack into the CONNECT-IP session and
+// injects any ICMP error the session generates back into the stack.
+func (t *tunnel) pumpToTunnel(ctx context.Context, sess *ipSession, bufferPool *sync.Pool) error {
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		bufPtr := bufferPool.Get().(*[]byte)
+		n, err := t.readPacket(*bufPtr)
+		if err != nil {
+			bufferPool.Put(bufPtr)
+			return err
+		}
+		if ctx.Err() != nil {
+			bufferPool.Put(bufPtr)
+			return ctx.Err()
+		}
+		icmp, err := sess.ipConn.WritePacketBuffer(*bufPtr, datagramContextIDHeadroom, n)
+		bufferPool.Put(bufPtr)
+		if err != nil {
+			if errors.As(err, new(*connectip.CloseError)) {
+				return err
+			}
+			// A single rejected packet (oversized, unroutable source) must not
+			// take the tunnel down.
+			newError("failed to write to the tunnel").Base(err).AtDebug().WriteToLog()
+			continue
+		}
+		if len(icmp) > 0 {
+			if err := t.writePacket(icmp); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+// pumpFromTunnel forwards packets from the CONNECT-IP session into the stack.
+func (t *tunnel) pumpFromTunnel(sess *ipSession, useHTTP2 bool) error {
+	for {
+		packet, err := sess.ipConn.ReadPacketZeroCopy(true)
+		if err != nil {
+			// Over QUIC a malformed datagram is recoverable, the stream is
+			// what carries fatal errors. HTTP/2 has no datagrams, so every
+			// read error there is fatal.
+			if useHTTP2 || errors.As(err, new(*connectip.CloseError)) {
+				return err
+			}
+			newError("failed to read from the tunnel").Base(err).AtDebug().WriteToLog()
+			continue
+		}
+		if err := t.writePacket(packet); err != nil {
+			return err
+		}
+	}
+}
+
+func waitPumps(wg *sync.WaitGroup) {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(pumpShutdownGrace):
+		newError("a tunnel pump did not stop in time, it will be serialized against the next cycle").AtDebug().WriteToLog()
+	}
+}
+
+func sleep(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}

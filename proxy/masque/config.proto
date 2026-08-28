@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package exclave.core.proxy.masque;
+option csharp_namespace = "Exclave.Core.Proxy.Masque";
+option go_package = "github.com/exclavenetwork/exclave-core/v5/proxy/masque";
+option java_package = "com.github.exclavenetwork.exclave.core.proxy.masque";
+option java_multiple_files = true;
+
+import "common/protoext/extensions.proto";
+import "common/net/address.proto";
+
+message ClientConfig {
+  option (exclave.core.common.protoext.message_opt).type = "outbound";
+  option (exclave.core.common.protoext.message_opt).short_name = "masque";
+
+  enum DomainStrategy {
+    USE_IP = 0;
+    USE_IP4 = 1;
+    USE_IP6 = 2;
+    PREFER_IP4 = 3;
+    PREFER_IP6 = 4;
+  }
+
+  // Endpoint of the MASQUE proxy, used in QUIC (HTTP/3) mode.
+  exclave.core.common.net.IPOrDomain address = 1;
+  uint32 port = 2;
+  // Endpoint used in HTTP/2 mode instead of `address`. Optional.
+  exclave.core.common.net.IPOrDomain http2_address = 3;
+
+  // Base64 encoded DER of the enrolled ECDSA P-256 private key.
+  string private_key = 4;
+  // PEM encoded PKIX public key of the endpoint, pinned during the handshake.
+  string endpoint_public_key = 5;
+  // Addresses assigned to this device inside the tunnel.
+  repeated string local_address = 6;
+
+  string server_name = 7;
+  int32 mtu = 8;
+  // Connect over TCP+TLS/HTTP2 instead of QUIC/HTTP3.
+  bool use_http2 = 9;
+  // Skip endpoint public key pinning.
+  bool allow_insecure = 10;
+  // QUIC keep alive period in seconds. 0 selects the default.
+  uint32 keepalive_period = 11;
+  // Fixed QUIC initial packet size. 0 keeps path MTU discovery enabled.
+  uint32 initial_packet_size = 12;
+
+  DomainStrategy domain_strategy = 13;
+}

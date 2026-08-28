@@ -20,6 +20,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/metacubex/utls v1.8.7
 	github.com/miekg/dns v1.1.73
+	github.com/miron404/connect-ip-go v0.0.0-20260828212855-30b3cfe52fb9
 	github.com/pires/go-proxyproto v0.15.0
 	github.com/quic-go/quic-go v0.61.0
 	github.com/refraction-networking/utls v1.8.3-0.20260802151714-23b1dac19c06
@@ -34,6 +35,7 @@ require (
 	github.com/v2fly/BrowserBridge v0.0.0-20210430233438-0570fc1d7d08
 	github.com/v2fly/ss-bloomring v0.0.0-20210312155135-28617310f63e
 	github.com/v2fly/struc v0.0.0-20241227015403-8e8fa1badfd6
+	github.com/yosida95/uritemplate/v3 v3.0.2
 	go.uber.org/mock v0.6.0
 	go4.org/netipx v0.0.0-20260823151212-3075585bcbeb
 	golang.org/x/crypto v0.55.0
@@ -47,6 +49,8 @@ require (
 	h12.io/socks v1.0.3
 	lukechampine.com/blake3 v1.4.1
 )
+
+require github.com/dunglas/httpsfv v1.0.2 // indirect
 
 require (
 	github.com/andybalholm/brotli v1.2.3 // indirect

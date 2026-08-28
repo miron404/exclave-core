@@ -1,0 +1,292 @@
+// Package masque implements a MASQUE (CONNECT-IP, RFC 9484) outbound, as
+// deployed by Cloudflare WARP.
+//
+// The tunnel setup follows https://github.com/Diniboy1123/usque (MIT), which
+// documented Cloudflare's non standard bits: the client authenticates with a
+// short lived self signed certificate carrying the enrolled device key, the
+// endpoint certificate is pinned by public key rather than by name, and the
+// CONNECT-IP request is sent with the `cf-connect-ip` protocol.
+package masque
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
+	"math/big"
+	gonet "net"
+	"net/http"
+	"strings"
+	"time"
+
+	connectip "github.com/miron404/connect-ip-go"
+	"github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/http3"
+	"github.com/yosida95/uritemplate/v3"
+	"golang.org/x/net/http2"
+
+	"github.com/exclavenetwork/exclave-core/v5/common/net"
+	"github.com/exclavenetwork/exclave-core/v5/common/singbridge"
+	"github.com/exclavenetwork/exclave-core/v5/transport/internet"
+)
+
+const (
+	// DefaultServerName is the SNI the official client sends. It never matches
+	// the endpoint certificate, which is why the key is pinned instead.
+	DefaultServerName = "consumer-masque.cloudflareclient.com"
+	// connectURI is the CONNECT-IP request target.
+	connectURI = "https://cloudflareaccess.com"
+	// requestProtocol is Cloudflare's non standard CONNECT-IP protocol name.
+	requestProtocol = "cf-connect-ip"
+
+	defaultMTU             = 1280
+	defaultKeepalivePeriod = 30 * time.Second
+	// clientCertValidity matches the official client; the certificate only
+	// carries the enrolled key, so a short lifetime costs nothing.
+	clientCertValidity = 24 * time.Hour
+)
+
+// accessDeniedError reports an endpoint that rejected the enrolled key.
+var accessDeniedHint = "login failed: the TLS key and certificate are not enrolled with the endpoint"
+
+func parsePrivateKey(encoded string) (*ecdsa.PrivateKey, error) {
+	der, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encoded))
+	if err != nil {
+		return nil, newError("failed to decode private key").Base(err)
+	}
+	key, err := x509.ParseECPrivateKey(der)
+	if err != nil {
+		return nil, newError("failed to parse private key").Base(err)
+	}
+	return key, nil
+}
+
+func parseEndpointPublicKey(encoded string) (*ecdsa.PublicKey, error) {
+	block, _ := pem.Decode([]byte(encoded))
+	if block == nil {
+		return nil, newError("failed to decode endpoint public key")
+	}
+	key, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, newError("failed to parse endpoint public key").Base(err)
+	}
+	publicKey, ok := key.(*ecdsa.PublicKey)
+	if !ok {
+		return nil, newError("endpoint public key is not ECDSA")
+	}
+	return publicKey, nil
+}
+
+// generateClientCert builds the self signed certificate presented to the
+// endpoint. Only the embedded public key is checked by the peer.
+func generateClientCert(privateKey *ecdsa.PrivateKey) ([][]byte, error) {
+	certificate, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{
+		SerialNumber: big.NewInt(0),
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(clientCertValidity),
+	}, &x509.Certificate{}, &privateKey.PublicKey, privateKey)
+	if err != nil {
+		return nil, newError("failed to generate client certificate").Base(err)
+	}
+	return [][]byte{certificate}, nil
+}
+
+// prepareTLSConfig builds a TLS configuration pinned to the endpoint key.
+//
+// The SNI is a Cloudflare hostname that the endpoint certificate does not
+// cover, so name verification has to be off; the endpoint is authenticated by
+// comparing its public key with the one handed out at enrollment instead.
+func (o *Outbound) prepareTLSConfig() (*tls.Config, error) {
+	certificate, err := generateClientCert(o.privateKey)
+	if err != nil {
+		return nil, err
+	}
+	tlsConfig := &tls.Config{
+		Certificates:       []tls.Certificate{{Certificate: certificate, PrivateKey: o.privateKey}},
+		ServerName:         o.serverName,
+		NextProtos:         []string{http3.NextProtoH3},
+		InsecureSkipVerify: true,
+	}
+	if o.endpointPublicKey == nil {
+		return tlsConfig, nil
+	}
+	tlsConfig.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+		if len(rawCerts) == 0 {
+			return nil
+		}
+		certificate, err := x509.ParseCertificate(rawCerts[0])
+		if err != nil {
+			return err
+		}
+		publicKey, ok := certificate.PublicKey.(*ecdsa.PublicKey)
+		if !ok {
+			return x509.ErrUnsupportedAlgorithm
+		}
+		if !publicKey.Equal(o.endpointPublicKey) {
+			// 10 is x509.NoValidChains, spelled out to keep the older Go
+			// versions this core still supports building.
+			return x509.CertificateInvalidError{
+				Cert:   certificate,
+				Reason: 10,
+				Detail: "endpoint public key does not match the enrolled one",
+			}
+		}
+		return nil
+	}
+	return tlsConfig, nil
+}
+
+func (o *Outbound) quicConfig() *quic.Config {
+	config := &quic.Config{
+		EnableDatagrams: true,
+		KeepAlivePeriod: o.keepalivePeriod,
+	}
+	if o.initialPacketSize > 0 {
+		config.InitialPacketSize = o.initialPacketSize
+		config.DisablePathMTUDiscovery = true
+	}
+	return config
+}
+
+// ipSession is one live CONNECT-IP tunnel together with everything that has to be
+// torn down with it.
+type ipSession struct {
+	ipConn     *connectip.Conn
+	transport  *http3.Transport
+	quicConn   *quic.Conn
+	packetConn gonet.PacketConn
+}
+
+func (s *ipSession) Close() {
+	if s == nil {
+		return
+	}
+	if s.ipConn != nil {
+		_ = s.ipConn.Close()
+	}
+	if s.transport != nil {
+		_ = s.transport.Close()
+	}
+	if s.quicConn != nil {
+		_ = s.quicConn.CloseWithError(0, "")
+	}
+	if s.packetConn != nil {
+		_ = s.packetConn.Close()
+	}
+}
+
+// dial establishes a CONNECT-IP session over the configured transport.
+func (o *Outbound) dial(ctx context.Context, dialer internet.Dialer) (*ipSession, error) {
+	tlsConfig, err := o.prepareTLSConfig()
+	if err != nil {
+		return nil, err
+	}
+	var sess *ipSession
+	var response *http.Response
+	if o.useHTTP2 {
+		sess, response, err = o.dialHTTP2(ctx, dialer, tlsConfig)
+	} else {
+		sess, response, err = o.dialHTTP3(ctx, dialer, tlsConfig)
+	}
+	if err != nil {
+		if strings.Contains(err.Error(), "tls: access denied") {
+			return nil, newError(accessDeniedHint).Base(err)
+		}
+		return nil, err
+	}
+	if response.StatusCode != http.StatusOK {
+		sess.Close()
+		return nil, newError("endpoint rejected the tunnel: ", response.Status)
+	}
+	return sess, nil
+}
+
+// dialHTTP3 opens the tunnel over QUIC. The UDP socket comes from the core
+// dialer, so on Android it is protected from the VPN service and honours the
+// outbound's sockopt settings.
+func (o *Outbound) dialHTTP3(ctx context.Context, dialer internet.Dialer, tlsConfig *tls.Config) (*ipSession, *http.Response, error) {
+	destination := o.endpoint(net.Network_UDP)
+	if !destination.Address.Family().IsIP() {
+		return nil, nil, newError("QUIC mode needs an IP endpoint, got ", destination.Address)
+	}
+	packetConn, err := singbridge.NewDialerWrapper(dialer).ListenPacket(ctx, singbridge.ToSocksAddr(destination))
+	if err != nil {
+		return nil, nil, newError("failed to listen packet").Base(err)
+	}
+	// Without an explicit connection ID length the endpoint occasionally
+	// answers with PROTOCOL_VIOLATION and drops the connection.
+	transport := &quic.Transport{Conn: packetConn, ConnectionIDLength: 20}
+	quicConn, err := transport.Dial(ctx, &gonet.UDPAddr{
+		IP:   destination.Address.IP(),
+		Port: int(destination.Port),
+	}, tlsConfig, o.quicConfig())
+	if err != nil {
+		_ = packetConn.Close()
+		return nil, nil, newError("failed to dial QUIC").Base(err)
+	}
+	h3Transport := &http3.Transport{
+		EnableDatagrams: true,
+		AdditionalSettings: map[uint64]uint64{
+			// SETTINGS_H3_DATAGRAM_00, deprecated but still sent by the
+			// official client and expected by the endpoint.
+			0x276: 1,
+		},
+		DisableCompression: true,
+	}
+	ipConn, response, err := connectip.Dial(
+		ctx,
+		h3Transport.NewClientConn(quicConn),
+		uritemplate.MustNew(connectURI),
+		requestProtocol,
+		http.Header{"User-Agent": []string{""}},
+		true,
+	)
+	if err != nil {
+		_ = h3Transport.Close()
+		_ = quicConn.CloseWithError(0, "connect-ip dial failed")
+		_ = packetConn.Close()
+		return nil, nil, newError("failed to dial connect-ip").Base(err)
+	}
+	return &ipSession{
+		ipConn:     ipConn,
+		transport:  h3Transport,
+		quicConn:   quicConn,
+		packetConn: packetConn,
+	}, response, nil
+}
+
+// dialHTTP2 opens the tunnel over TCP+TLS/HTTP2, the fallback for networks that
+// block QUIC.
+func (o *Outbound) dialHTTP2(ctx context.Context, dialer internet.Dialer, tlsConfig *tls.Config) (*ipSession, *http.Response, error) {
+	destination := o.endpoint(net.Network_TCP)
+	h2TLSConfig := tlsConfig.Clone()
+	h2TLSConfig.NextProtos = []string{"h2"}
+	client := &http.Client{Transport: &http2.Transport{
+		DisableCompression: true,
+		DialTLSContext: func(ctx context.Context, _, _ string, _ *tls.Config) (gonet.Conn, error) {
+			conn, err := dialer.Dial(ctx, destination)
+			if err != nil {
+				return nil, err
+			}
+			tlsConn := tls.Client(conn, h2TLSConfig)
+			if err := tlsConn.HandshakeContext(ctx); err != nil {
+				_ = conn.Close()
+				return nil, err
+			}
+			return tlsConn, nil
+		},
+	}}
+	ipConn, response, err := connectip.DialH2(ctx, client, uritemplate.MustNew(connectURI), http.Header{
+		"User-Agent":       []string{""},
+		"cf-connect-proto": []string{requestProtocol},
+		// TODO: post quantum key agreement is not implemented yet.
+		"pq-enabled": []string{"false"},
+	})
+	if err != nil {
+		return nil, nil, newError("failed to dial connect-ip over HTTP/2").Base(err)
+	}
+	return &ipSession{ipConn: ipConn}, response, nil
+}
