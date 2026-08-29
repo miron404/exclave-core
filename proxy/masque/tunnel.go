@@ -41,6 +41,10 @@ const (
 	// refused before it has had a chance to probe.
 	pathMTUGrace = 20 * time.Second
 
+	// icmpQueueSize bounds the ICMP answers waiting to go back into the stack.
+	// They are advisory, so dropping one under pressure costs a retransmit.
+	icmpQueueSize = 16
+
 	reconnectDelayMin = 1 * time.Second
 	reconnectDelayMax = 30 * time.Second
 
@@ -226,9 +230,23 @@ func (t *tunnel) maintain(ctx context.Context, o *Outbound, dialer internet.Dial
 		if sess.canDiscoverPathMTU {
 			resizeAfter = resizeAfter.Add(pathMTUGrace)
 		}
+		// The reader must never write to the device: the stack hands packets
+		// out over an unbuffered channel that only the reader drains, so a
+		// write that makes the stack answer would wait on the reader itself.
+		icmpQueue := make(chan []byte, icmpQueueSize)
+		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errChan <- t.pumpToTunnel(pumpCtx, sess, &bufferPool, resizeAfter)
+			for packet := range icmpQueue {
+				if err := t.writePacket(packet); err != nil {
+					return
+				}
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			defer close(icmpQueue)
+			errChan <- t.pumpToTunnel(pumpCtx, sess, &bufferPool, resizeAfter, icmpQueue)
 		}()
 		go func() {
 			defer wg.Done()
@@ -251,7 +269,7 @@ func (t *tunnel) maintain(ctx context.Context, o *Outbound, dialer internet.Dial
 
 // pumpToTunnel forwards packets from the stack into the CONNECT-IP session and
 // injects any ICMP error the session generates back into the stack.
-func (t *tunnel) pumpToTunnel(ctx context.Context, sess *ipSession, bufferPool *sync.Pool, resizeAfter time.Time) error {
+func (t *tunnel) pumpToTunnel(ctx context.Context, sess *ipSession, bufferPool *sync.Pool, resizeAfter time.Time, icmpQueue chan<- []byte) error {
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -288,8 +306,10 @@ func (t *tunnel) pumpToTunnel(ctx context.Context, sess *ipSession, bufferPool *
 			// the stack shrink that one flow. That only helps flows that honour
 			// it, so the size is also remembered for the tunnel as a whole.
 			t.reportOversizedPacket(n, nextHopMTU(icmp), resizeAfter)
-			if err := t.writePacket(icmp); err != nil {
-				return err
+			select {
+			case icmpQueue <- icmp:
+			default:
+				// The stack is already being told; one more answer adds nothing.
 			}
 		}
 	}
