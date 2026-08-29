@@ -157,6 +157,9 @@ type ipSession struct {
 	// beyond the initial size. When it cannot, a packet that does not fit will
 	// never fit, and the tunnel has to be resized instead of waiting.
 	canDiscoverPathMTU bool
+	// counters are the core's byte counters for this connection, fed by the
+	// tunnel because the socket itself is handed to quic-go unwrapped.
+	counters *socketCounters
 	// cancel releases the context the session was dialed with. The HTTP/2
 	// transport keeps the request alive for the lifetime of the tunnel, so this
 	// must not be called before the session is torn down.
@@ -238,7 +241,7 @@ func (o *Outbound) dialHTTP3(ctx context.Context, dialer internet.Dialer, tlsCon
 		IP:   destination.Address.IP(),
 		Port: int(destination.Port),
 	}
-	packetConn, canDiscoverPathMTU, err := listenPacket(ctx, dialer, destination, endpoint)
+	packetConn, counters, canDiscoverPathMTU, err := listenPacket(ctx, dialer, destination, endpoint)
 	if err != nil {
 		return nil, nil, newError("failed to listen packet").Base(err)
 	}
@@ -280,6 +283,7 @@ func (o *Outbound) dialHTTP3(ctx context.Context, dialer internet.Dialer, tlsCon
 	}
 	return &ipSession{
 		canDiscoverPathMTU: canDiscoverPathMTU,
+		counters:           counters,
 		ipConn:             ipConn,
 		transport:          h3Transport,
 		quicConn:           quicConn,

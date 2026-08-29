@@ -268,6 +268,9 @@ func (t *tunnel) pumpToTunnel(ctx context.Context, sess *ipSession, bufferPool *
 		}
 		icmp, err := sess.ipConn.WritePacketBuffer(*bufPtr, datagramContextIDHeadroom, n)
 		bufferPool.Put(bufPtr)
+		if err == nil {
+			sess.counters.addWrite(n)
+		}
 		if err != nil {
 			if errors.As(err, new(*connectip.CloseError)) {
 				return err
@@ -306,6 +309,7 @@ func (t *tunnel) pumpFromTunnel(sess *ipSession, useHTTP2 bool) error {
 			newError("failed to read from the tunnel").Base(err).AtDebug().WriteToLog()
 			continue
 		}
+		sess.counters.addRead(len(packet))
 		if err := t.writePacket(packet); err != nil {
 			return err
 		}
