@@ -35,11 +35,11 @@ const (
 	// it the netstack refuses to send IPv6 at all.
 	minimumIPv6MTU = 1280
 
-	// pathMTUGrace is how long a connection that can discover the path MTU is
-	// given to grow its packets before the tunnel is resized instead. Discovery
-	// starts at the initial packet size, so the first full size packets can be
-	// refused before it has had a chance to probe.
-	pathMTUGrace = 20 * time.Second
+	// pathMTUSettle is how long the limit has to stop improving before the
+	// search is taken as finished. A refusal on its own means nothing: path MTU
+	// discovery starts below what the tunnel sends and climbs, so early ones are
+	// expected. What settles it is the limit no longer moving.
+	pathMTUSettle = 5 * time.Second
 
 	// icmpQueueSize bounds the ICMP answers waiting to go back into the stack.
 	// They are advisory, so dropping one under pressure costs a retransmit.
@@ -80,6 +80,10 @@ type tunnel struct {
 	// not fill the log.
 	dropReported      sync.Once
 	oversizedReported sync.Once
+
+	// Progress of the path MTU search. Only the reading pump touches these.
+	bestDatagramMTU int
+	refusedSince    time.Time
 }
 
 func newTunnel(ctx context.Context, o *Outbound, dialer internet.Dialer) (*tunnel, error) {
@@ -239,10 +243,8 @@ func (t *tunnel) maintain(ctx context.Context, o *Outbound, dialer internet.Dial
 		pumpCtx, cancelPumps := context.WithCancel(ctx)
 		var wg sync.WaitGroup
 		wg.Add(2)
-		resizeAfter := time.Now()
-		if sess.canDiscoverPathMTU {
-			resizeAfter = resizeAfter.Add(pathMTUGrace)
-		}
+		// A new connection starts its own search.
+		t.bestDatagramMTU, t.refusedSince = 0, time.Time{}
 		// The reader must never write to the device: the stack hands packets
 		// out over an unbuffered channel that only the reader drains, so a
 		// write that makes the stack answer would wait on the reader itself.
@@ -260,7 +262,7 @@ func (t *tunnel) maintain(ctx context.Context, o *Outbound, dialer internet.Dial
 		go func() {
 			defer wg.Done()
 			defer close(icmpQueue)
-			errChan <- t.pumpToTunnel(pumpCtx, sess, &bufferPool, resizeAfter, icmpQueue)
+			errChan <- t.pumpToTunnel(pumpCtx, sess, &bufferPool, icmpQueue)
 		}()
 		go func() {
 			defer wg.Done()
@@ -283,7 +285,7 @@ func (t *tunnel) maintain(ctx context.Context, o *Outbound, dialer internet.Dial
 
 // pumpToTunnel forwards packets from the stack into the CONNECT-IP session and
 // injects any ICMP error the session generates back into the stack.
-func (t *tunnel) pumpToTunnel(ctx context.Context, sess *ipSession, bufferPool *sync.Pool, resizeAfter time.Time, icmpQueue chan<- []byte) error {
+func (t *tunnel) pumpToTunnel(ctx context.Context, sess *ipSession, bufferPool *sync.Pool, icmpQueue chan<- []byte) error {
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -320,7 +322,7 @@ func (t *tunnel) pumpToTunnel(ctx context.Context, sess *ipSession, bufferPool *
 			// ICMP "packet too big" naming the size that does fit, which makes
 			// the stack shrink that one flow. That only helps flows that honour
 			// it, so the size is also remembered for the tunnel as a whole.
-			t.reportOversizedPacket(n, nextHopMTU(icmp), resizeAfter)
+			t.noteOversizedPacket(n, nextHopMTU(icmp), sess.canDiscoverPathMTU)
 			select {
 			case icmpQueue <- icmp:
 			default:
@@ -359,18 +361,38 @@ func (t *tunnel) reportDroppedPacket(size int, err error) {
 	})
 }
 
-// reportOversizedPacket records that the path cannot carry packets the size of
-// the tunnel's MTU, and asks the outbound to rebuild the tunnel at a size that
-// fits. Relying on the ICMP answer alone leaves every flow that ignores it
-// stuck retransmitting a packet that can never be delivered.
-func (t *tunnel) reportOversizedPacket(size, fits int, resizeAfter time.Time) {
+// noteOversizedPacket follows the path MTU search while packets are being
+// refused, and resizes the tunnel once the search has settled.
+//
+// The ICMP answer sent alongside only reaches the flows that act on it, so a
+// path that cannot carry the tunnel has to be met by resizing it. Doing that on
+// the first refusal would be wrong: discovery climbs, and what does not fit now
+// may fit shortly. So the limit is watched instead of a clock, and the wait
+// restarts every time it improves. A connection that cannot discover anything
+// has nothing to wait for.
+func (t *tunnel) noteOversizedPacket(size, fits int, discovering bool) {
+	if fits <= 0 {
+		return
+	}
 	t.oversizedReported.Do(func() {
 		newError("a packet of ", size, " bytes does not fit a QUIC datagram on this path,",
 			" which carries at most ", fits).AtWarning().WriteToLog()
 	})
-	// While the connection is still growing its packets this is expected and
-	// passes on its own; the ICMP answer covers the flows meanwhile.
-	if fits > 0 && !time.Now().Before(resizeAfter) {
+
+	now := time.Now()
+	if fits > t.bestDatagramMTU {
+		t.bestDatagramMTU = fits
+		t.refusedSince = now
+		return
+	}
+	if t.refusedSince.IsZero() {
+		t.refusedSince = now
+	}
+	settle := pathMTUSettle
+	if !discovering {
+		settle = 0
+	}
+	if now.Sub(t.refusedSince) >= settle {
 		t.outbound.lowerMTU(fits)
 	}
 }
