@@ -37,12 +37,15 @@ var (
 
 // Outbound proxies traffic through a MASQUE CONNECT-IP tunnel.
 type Outbound struct {
-	serverAddress     net.Address
-	http2Address      net.Address
-	serverPort        net.Port
-	serverName        string
-	useHTTP2          bool
-	mtu               int
+	serverAddress net.Address
+	http2Address  net.Address
+	serverPort    net.Port
+	serverName    string
+	useHTTP2      bool
+	mtu           int
+	// configuredMTU is what the profile asked for. mtu is lowered when a path
+	// turns out not to carry it, and returns here when the network changes.
+	configuredMTU     int
 	keepalivePeriod   time.Duration
 	initialPacketSize uint16
 	domainStrategy    ClientConfig_DomainStrategy
@@ -99,6 +102,7 @@ func NewClient(ctx context.Context, config *ClientConfig) (*Outbound, error) {
 	if o.mtu <= 0 {
 		o.mtu = defaultMTU
 	}
+	o.configuredMTU = o.mtu
 	if o.keepalivePeriod <= 0 {
 		o.keepalivePeriod = defaultKeepalivePeriod
 	}
@@ -182,6 +186,12 @@ func (o *Outbound) lowerMTU(mtu int) {
 // InterfaceUpdate drops the tunnel when the underlying network changes, so the
 // next request rebuilds it over the new interface.
 func (o *Outbound) InterfaceUpdate() {
+	// An MTU learned from the old path says nothing about the new one, and it
+	// only ever goes down, so without this a single bad network would hold the
+	// tunnel down until the process restarts.
+	o.tunnelAccess.Lock()
+	o.mtu = o.configuredMTU
+	o.tunnelAccess.Unlock()
 	_ = o.Close()
 }
 

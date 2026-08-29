@@ -69,8 +69,12 @@ type tunnel struct {
 	cancel   context.CancelFunc
 	done     chan struct{}
 
-	// readMutex serializes device reads across reconnect cycles.
-	readMutex sync.Mutex
+	// readMutex serializes device reads across reconnect cycles. It also covers
+	// the scratch the device read needs, which is reused rather than allocated
+	// for every packet.
+	readMutex   sync.Mutex
+	readBuffers [][]byte
+	readSizes   []int
 
 	// Each of these reports once, so a condition that repeats per packet does
 	// not fill the log.
@@ -100,12 +104,14 @@ func newTunnel(ctx context.Context, o *Outbound, dialer internet.Dialer) (*tunne
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	t := &tunnel{
-		outbound: o,
-		device:   device,
-		net:      netStack,
-		mtu:      o.mtu,
-		cancel:   cancel,
-		done:     make(chan struct{}),
+		outbound:    o,
+		device:      device,
+		net:         netStack,
+		mtu:         o.mtu,
+		cancel:      cancel,
+		done:        make(chan struct{}),
+		readBuffers: make([][]byte, 1),
+		readSizes:   make([]int, 1),
 	}
 	go func() {
 		defer close(t.done)
@@ -133,19 +139,26 @@ func (t *tunnel) DialUDPAddrPort(laddr, raddr netip.AddrPort) (net.Conn, error) 
 // room for the datagram context ID. It returns the full buffer and the packet
 // length.
 func (t *tunnel) readPacket(buf []byte) (int, error) {
-	buffers := [][]byte{buf[datagramContextIDHeadroom:]}
-	sizes := []int{0}
 	t.readMutex.Lock()
-	_, err := t.device.Read(buffers, sizes, 0)
+	t.readBuffers[0] = buf[datagramContextIDHeadroom:]
+	t.readSizes[0] = 0
+	_, err := t.device.Read(t.readBuffers, t.readSizes, 0)
+	n := t.readSizes[0]
+	t.readBuffers[0] = nil
 	t.readMutex.Unlock()
 	if err != nil {
 		return 0, err
 	}
-	return sizes[0], nil
+	return n, nil
 }
 
-func (t *tunnel) writePacket(packet []byte) error {
-	_, err := t.device.Write([][]byte{packet}, 0)
+// writePacket hands a packet to the stack. The caller owns the scratch, since
+// the two writers run at the same time; reusing it keeps the hot path free of
+// an allocation per packet.
+func (t *tunnel) writePacket(scratch [][]byte, packet []byte) error {
+	scratch[0] = packet
+	_, err := t.device.Write(scratch, 0)
+	scratch[0] = nil
 	return err
 }
 
@@ -237,8 +250,9 @@ func (t *tunnel) maintain(ctx context.Context, o *Outbound, dialer internet.Dial
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			scratch := make([][]byte, 1)
 			for packet := range icmpQueue {
-				if err := t.writePacket(packet); err != nil {
+				if err := t.writePacket(scratch, packet); err != nil {
 					return
 				}
 			}
@@ -286,7 +300,8 @@ func (t *tunnel) pumpToTunnel(ctx context.Context, sess *ipSession, bufferPool *
 		}
 		icmp, err := sess.ipConn.WritePacketBuffer(*bufPtr, datagramContextIDHeadroom, n)
 		bufferPool.Put(bufPtr)
-		if err == nil {
+		if err == nil && len(icmp) == 0 {
+			// An ICMP answer means the packet was refused, not sent.
 			sess.counters.addWrite(n)
 		}
 		if err != nil {
@@ -317,6 +332,7 @@ func (t *tunnel) pumpToTunnel(ctx context.Context, sess *ipSession, bufferPool *
 
 // pumpFromTunnel forwards packets from the CONNECT-IP session into the stack.
 func (t *tunnel) pumpFromTunnel(sess *ipSession, useHTTP2 bool) error {
+	scratch := make([][]byte, 1)
 	for {
 		packet, err := sess.ipConn.ReadPacketZeroCopy(true)
 		if err != nil {
@@ -330,7 +346,7 @@ func (t *tunnel) pumpFromTunnel(sess *ipSession, useHTTP2 bool) error {
 			continue
 		}
 		sess.counters.addRead(len(packet))
-		if err := t.writePacket(packet); err != nil {
+		if err := t.writePacket(scratch, packet); err != nil {
 			return err
 		}
 	}
