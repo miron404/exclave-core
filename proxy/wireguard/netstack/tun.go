@@ -52,8 +52,11 @@ type netTun struct {
 	incomingPacket chan *buffer.View
 	mtu            int
 	hasV4, hasV6   bool
-	isClosed       bool
-	closeOnce      sync.Once
+	// closed is what shuts the device down. incomingPacket is deliberately
+	// left open: the stack can be part way through handing a packet over when
+	// the device is closed, and closing it under such a sender panics.
+	closed    chan struct{}
+	closeOnce sync.Once
 }
 
 type Net netTun
@@ -69,6 +72,7 @@ func CreateNetTUN(localAddresses []netip.Addr, mtu int, promiscuousMode bool) (t
 		stack:          stack.New(opts),
 		events:         make(chan tun.Event, 10),
 		incomingPacket: make(chan *buffer.View),
+		closed:         make(chan struct{}),
 		mtu:            mtu,
 	}
 	sackEnabledOpt := tcpip.TCPSACKEnabled(true) // TCP SACK is disabled by default
@@ -131,8 +135,10 @@ func (tun *netTun) Events() <-chan tun.Event {
 }
 
 func (tun *netTun) Read(buf [][]byte, sizes []int, offset int) (int, error) {
-	view, ok := <-tun.incomingPacket
-	if !ok {
+	var view *buffer.View
+	select {
+	case view = <-tun.incomingPacket:
+	case <-tun.closed:
 		return 0, os.ErrClosed
 	}
 
@@ -145,6 +151,12 @@ func (tun *netTun) Read(buf [][]byte, sizes []int, offset int) (int, error) {
 }
 
 func (tun *netTun) Write(buf [][]byte, offset int) (int, error) {
+	select {
+	case <-tun.closed:
+		return 0, os.ErrClosed
+	default:
+	}
+
 	for _, buf := range buf {
 		packet := buf[offset:]
 		if len(packet) == 0 {
@@ -173,11 +185,18 @@ func (tun *netTun) WriteNotify() {
 	view := pkt.ToView()
 	pkt.DecRef()
 
-	tun.incomingPacket <- view
+	select {
+	case tun.incomingPacket <- view:
+	case <-tun.closed:
+	}
 }
 
 func (tun *netTun) Close() error {
 	tun.closeOnce.Do(func() {
+		// Released first, so anything on its way in or out gives up rather
+		// than working against a stack that is being taken apart.
+		close(tun.closed)
+
 		tun.stack.RemoveNIC(1)
 		tun.stack.Close()
 		tun.ep.RemoveNotify(tun.notifyHandle)
@@ -185,10 +204,6 @@ func (tun *netTun) Close() error {
 
 		if tun.events != nil {
 			close(tun.events)
-		}
-
-		if tun.incomingPacket != nil {
-			close(tun.incomingPacket)
 		}
 	})
 	return nil
