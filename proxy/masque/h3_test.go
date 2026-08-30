@@ -219,3 +219,24 @@ func TestUnwrappedSocketIsUsableByQUIC(t *testing.T) {
 	}
 	defer conn.CloseWithError(0, "")
 }
+
+// TestKeepalivePeriodIsNotHalvedByTheIdleTimeout pins the relationship between
+// the two: quic-go pings at min(KeepAlivePeriod, MaxIdleTimeout/2), so an idle
+// timeout left at its default turns every configured period into half of itself.
+func TestKeepalivePeriodIsNotHalvedByTheIdleTimeout(t *testing.T) {
+	for _, period := range []time.Duration{
+		5 * time.Second,
+		defaultKeepalivePeriod,
+		60 * time.Second,
+		5 * time.Minute,
+	} {
+		config := (&Outbound{keepalivePeriod: period}).quicConfig()
+		if interval := min(config.KeepAlivePeriod, config.MaxIdleTimeout/2); interval != period {
+			t.Errorf("a keepalive period of %v pings every %v", period, interval)
+		}
+		if config.MaxIdleTimeout < defaultIdleTimeout {
+			t.Errorf("a keepalive period of %v gives a stalled connection only %v to recover",
+				period, config.MaxIdleTimeout)
+		}
+	}
+}

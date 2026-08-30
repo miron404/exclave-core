@@ -43,6 +43,10 @@ const (
 
 	defaultMTU             = 1280
 	defaultKeepalivePeriod = 30 * time.Second
+	// defaultIdleTimeout is quic-go's own default, kept as the floor for the
+	// idle timeout the keepalive period is turned into, so that a short period
+	// does not also shorten how long a stalled connection is given to recover.
+	defaultIdleTimeout = 30 * time.Second
 	// clientCertValidity matches the official client; the certificate only
 	// carries the enrolled key, so a short lifetime costs nothing.
 	clientCertValidity = 24 * time.Hour
@@ -138,10 +142,24 @@ func (o *Outbound) prepareTLSConfig() (*tls.Config, error) {
 	return tlsConfig, nil
 }
 
+// quicConfig builds the QUIC configuration the tunnel is dialed with.
+//
+// The idle timeout has to be set alongside the keepalive period. quic-go pings
+// at min(KeepAlivePeriod, MaxIdleTimeout/2), so leaving the idle timeout at its
+// 30s default silently halves every configured period: the 30s default here
+// became a ping every 15 seconds, which is a radio wakeup every 15 seconds for
+// as long as the tunnel is up. Two keepalive periods leave the connection
+// exactly one unanswered ping of grace, which is the arrangement that clamp
+// exists to produce.
+//
+// The peer's own advertised idle timeout is still taken into account, and it is
+// the smaller of the two that counts, so the period asked for here is a ceiling
+// rather than a promise.
 func (o *Outbound) quicConfig() *quic.Config {
 	config := &quic.Config{
 		EnableDatagrams: true,
 		KeepAlivePeriod: o.keepalivePeriod,
+		MaxIdleTimeout:  max(2*o.keepalivePeriod, defaultIdleTimeout),
 	}
 	if o.initialPacketSize > 0 {
 		config.InitialPacketSize = o.initialPacketSize
