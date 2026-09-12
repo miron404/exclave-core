@@ -313,11 +313,35 @@ func (o *Outbound) dialHTTP3(ctx context.Context, dialer internet.Dialer, tlsCon
 // dialHTTP2 opens the tunnel over TCP+TLS/HTTP2, the fallback for networks that
 // block QUIC.
 func (o *Outbound) dialHTTP2(ctx context.Context, dialer internet.Dialer, tlsConfig *tls.Config) (*ipSession, *http.Response, error) {
+	transport := o.http2Transport(dialer, tlsConfig)
+	client := &http.Client{Transport: transport}
+	ipConn, response, err := connectip.DialH2(ctx, client, uritemplate.MustNew(connectURI), http.Header{
+		"User-Agent":       []string{""},
+		"cf-connect-proto": []string{requestProtocol},
+		// TODO: post quantum key agreement is not implemented yet.
+		"pq-enabled": []string{"false"},
+	})
+	if err != nil {
+		transport.CloseIdleConnections()
+		return nil, nil, newError("failed to dial connect-ip over HTTP/2").Base(err)
+	}
+	return &ipSession{ipConn: ipConn, h2Transport: transport}, response, nil
+}
+
+// http2Transport builds the transport the CONNECT-IP request runs on. It dials
+// the endpoint itself, so that the connection the tunnel lives on is the one
+// this outbound made rather than one the pool happens to hold.
+func (o *Outbound) http2Transport(dialer internet.Dialer, tlsConfig *tls.Config) *http2.Transport {
 	destination := o.endpoint(net.Network_TCP)
 	h2TLSConfig := tlsConfig.Clone()
 	h2TLSConfig.NextProtos = []string{"h2"}
-	transport := &http2.Transport{
+	return &http2.Transport{
 		DisableCompression: true,
+		// A silent TCP path is indistinguishable from an idle one: the tunnel
+		// request stays open, both pumps stay parked, and nothing fails, so the
+		// supervisor never learns to redial. A ping settles it, at the cost of
+		// a wakeup per period, which is why it is off unless asked for.
+		ReadIdleTimeout: o.http2PingPeriod,
 		DialTLSContext: func(ctx context.Context, _, _ string, _ *tls.Config) (gonet.Conn, error) {
 			conn, err := dialer.Dial(ctx, destination)
 			if err != nil {
@@ -331,18 +355,6 @@ func (o *Outbound) dialHTTP2(ctx context.Context, dialer internet.Dialer, tlsCon
 			return tlsConn, nil
 		},
 	}
-	client := &http.Client{Transport: transport}
-	ipConn, response, err := connectip.DialH2(ctx, client, uritemplate.MustNew(connectURI), http.Header{
-		"User-Agent":       []string{""},
-		"cf-connect-proto": []string{requestProtocol},
-		// TODO: post quantum key agreement is not implemented yet.
-		"pq-enabled": []string{"false"},
-	})
-	if err != nil {
-		transport.CloseIdleConnections()
-		return nil, nil, newError("failed to dial connect-ip over HTTP/2").Base(err)
-	}
-	return &ipSession{ipConn: ipConn, h2Transport: transport}, response, nil
 }
 
 // endpointPacketConn presents a stream shaped connection as the net.PacketConn

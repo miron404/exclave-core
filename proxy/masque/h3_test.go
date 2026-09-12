@@ -19,6 +19,7 @@ import (
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 
+	"github.com/exclavenetwork/exclave-core/v5/common/net"
 	"github.com/exclavenetwork/exclave-core/v5/transport/internet"
 )
 
@@ -237,6 +238,25 @@ func TestKeepalivePeriodIsNotHalvedByTheIdleTimeout(t *testing.T) {
 		if config.MaxIdleTimeout < defaultIdleTimeout {
 			t.Errorf("a keepalive period of %v gives a stalled connection only %v to recover",
 				period, config.MaxIdleTimeout)
+		}
+	}
+}
+
+// The HTTP/2 mode holds a connection across a night idle without a ping, so the
+// liveness check exists for paths that die silently rather than as a default.
+// What must not happen is the profile asking for one and the transport not
+// getting it: nothing would fail, and the check would simply never run.
+func TestHTTP2LivenessCheckReachesTheTransport(t *testing.T) {
+	for _, period := range []time.Duration{0, 30 * time.Second, 5 * time.Minute} {
+		outbound := &Outbound{
+			serverAddress:   net.LocalHostIP,
+			serverPort:      443,
+			http2PingPeriod: period,
+		}
+		transport := outbound.http2Transport(nil, &tls.Config{})
+		if transport.ReadIdleTimeout != period {
+			t.Errorf("a ping period of %v reaches the transport as %v",
+				period, transport.ReadIdleTimeout)
 		}
 	}
 }

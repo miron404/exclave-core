@@ -22,6 +22,7 @@ type MasqueClientConfig struct {
 	AllowInsecure     bool               `json:"allowInsecure"`
 	KeepalivePeriod   uint32             `json:"keepalivePeriod"`
 	InitialPacketSize uint32             `json:"initialPacketSize"`
+	HTTP2PingPeriod   uint32             `json:"http2PingPeriod"`
 	DomainStrategy    string             `json:"domainStrategy"`
 }
 
@@ -53,6 +54,7 @@ func (c *MasqueClientConfig) Build() (proto.Message, error) {
 		AllowInsecure:     c.AllowInsecure,
 		KeepalivePeriod:   c.KeepalivePeriod,
 		InitialPacketSize: c.InitialPacketSize,
+		Http2PingPeriod:   c.HTTP2PingPeriod,
 	}
 	if c.HTTP2Address != nil {
 		config.Http2Address = c.HTTP2Address.Build()

@@ -48,7 +48,10 @@ type Outbound struct {
 	configuredMTU     int
 	keepalivePeriod   time.Duration
 	initialPacketSize uint16
-	domainStrategy    ClientConfig_DomainStrategy
+	// http2PingPeriod is how long the HTTP/2 connection may receive nothing
+	// before it is pinged. Zero leaves it unchecked.
+	http2PingPeriod time.Duration
+	domainStrategy  ClientConfig_DomainStrategy
 
 	privateKey        *ecdsa.PrivateKey
 	endpointPublicKey *ecdsa.PublicKey
@@ -89,6 +92,7 @@ func NewClient(ctx context.Context, config *ClientConfig) (*Outbound, error) {
 		mtu:               int(config.Mtu),
 		keepalivePeriod:   time.Duration(config.KeepalivePeriod) * time.Second,
 		initialPacketSize: uint16(config.InitialPacketSize),
+		http2PingPeriod:   time.Duration(config.Http2PingPeriod) * time.Second,
 		domainStrategy:    config.DomainStrategy,
 		privateKey:        privateKey,
 		endpointPublicKey: endpointPublicKey,

@@ -44,6 +44,10 @@ message ClientConfig {
   uint32 keepalive_period = 11;
   // Fixed QUIC initial packet size. 0 keeps path MTU discovery enabled.
   uint32 initial_packet_size = 12;
+  // HTTP/2 liveness check period in seconds. A connection that has received
+  // nothing for this long is pinged, and dropped if the ping goes unanswered.
+  // 0 leaves the connection unchecked.
+  uint32 http2_ping_period = 14;
 
   DomainStrategy domain_strategy = 13;
 }
