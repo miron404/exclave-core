@@ -18,6 +18,7 @@ type SnellClientConfig struct {
 	Reuse          bool               `json:"reuse"`
 	ObfsMode       string             `json:"obfsMode"`
 	ObfsHost       string             `json:"obfsHost"`
+	ObfsURI        string             `json:"obfsURI"`
 	Mode           string             `json:"mode"`
 	DomainStrategy string             `json:"domainStrategy"`
 }
@@ -35,6 +36,7 @@ func (c *SnellClientConfig) Build() (proto.Message, error) {
 		Reuse:    c.Reuse,
 		ObfsMode: c.ObfsMode,
 		ObfsHost: c.ObfsHost,
+		ObfsUri:  c.ObfsURI,
 		Mode:     c.Mode,
 	}
 	switch strings.ToLower(c.DomainStrategy) {

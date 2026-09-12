@@ -84,6 +84,7 @@ type ClientConfig struct {
 	ObfsHost       string                      `protobuf:"bytes,8,opt,name=obfs_host,json=obfsHost,proto3" json:"obfs_host,omitempty"`
 	Mode           string                      `protobuf:"bytes,9,opt,name=mode,proto3" json:"mode,omitempty"`
 	DomainStrategy ClientConfig_DomainStrategy `protobuf:"varint,10,opt,name=domain_strategy,json=domainStrategy,proto3,enum=exclave.core.proxy.snell.ClientConfig_DomainStrategy" json:"domain_strategy,omitempty"`
+	ObfsUri        string                      `protobuf:"bytes,11,opt,name=obfs_uri,json=obfsUri,proto3" json:"obfs_uri,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -188,11 +189,18 @@ func (x *ClientConfig) GetDomainStrategy() ClientConfig_DomainStrategy {
 	return ClientConfig_USE_IP
 }
 
+func (x *ClientConfig) GetObfsUri() string {
+	if x != nil {
+		return x.ObfsUri
+	}
+	return ""
+}
+
 var File_proxy_snell_config_proto protoreflect.FileDescriptor
 
 const file_proxy_snell_config_proto_rawDesc = "" +
 	"\n" +
-	"\x18proxy/snell/config.proto\x12\x18exclave.core.proxy.snell\x1a common/protoext/extensions.proto\x1a\x18common/net/address.proto\"\xdb\x03\n" +
+	"\x18proxy/snell/config.proto\x12\x18exclave.core.proxy.snell\x1a common/protoext/extensions.proto\x1a\x18common/net/address.proto\"\xf6\x03\n" +
 	"\fClientConfig\x12=\n" +
 	"\aaddress\x18\x01 \x01(\v2#.exclave.core.common.net.IPOrDomainR\aaddress\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\rR\x04port\x12\x10\n" +
@@ -204,7 +212,8 @@ const file_proxy_snell_config_proto_rawDesc = "" +
 	"\tobfs_host\x18\b \x01(\tR\bobfsHost\x12\x12\n" +
 	"\x04mode\x18\t \x01(\tR\x04mode\x12^\n" +
 	"\x0fdomain_strategy\x18\n" +
-	" \x01(\x0e25.exclave.core.proxy.snell.ClientConfig.DomainStrategyR\x0edomainStrategy\"V\n" +
+	" \x01(\x0e25.exclave.core.proxy.snell.ClientConfig.DomainStrategyR\x0edomainStrategy\x12\x19\n" +
+	"\bobfs_uri\x18\v \x01(\tR\aobfsUri\"V\n" +
 	"\x0eDomainStrategy\x12\n" +
 	"\n" +
 	"\x06USE_IP\x10\x00\x12\v\n" +

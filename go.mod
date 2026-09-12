@@ -1,6 +1,6 @@
 module github.com/exclavenetwork/exclave-core/v5
 
-go 1.25.0
+go 1.26.0
 
 require (
 	filippo.io/mldsa v0.0.0-20260711112038-ff3f469cee29
@@ -9,11 +9,11 @@ require (
 	github.com/anytls/sing-anytls v0.0.13
 	github.com/apernet/quic-go v0.61.1-0.20260806010916-184d081eef3e
 	github.com/dgryski/go-camellia v0.0.0-20191119043421-69a8a13fb23d
-	github.com/enfein/mieru/v3 v3.36.0
+	github.com/enfein/mieru/v3 v3.36.1
 	github.com/exclavenetwork/hysteria/core/v2 v2.12.2-1
 	github.com/exclavenetwork/hysteria/extras/v2 v2.12.2-1
-	github.com/exclavenetwork/sing-juicity v0.3.0-beta.2
-	github.com/exclavenetwork/sing-shadowquic v0.0.0-20260828154517-83f88a9ce329
+	github.com/exclavenetwork/sing-juicity v0.3.0
+	github.com/exclavenetwork/sing-shadowquic v0.0.0-20260904152941-03a261e772e4
 	github.com/golang-collections/go-datastructures v0.0.0-20150211160725-59788d5eb259
 	github.com/golang/protobuf v1.5.4
 	github.com/google/go-cmp v0.7.0
@@ -22,14 +22,14 @@ require (
 	github.com/miekg/dns v1.1.73
 	github.com/miron404/connect-ip-go v0.0.0-20260828231553-a6b34803dbe5
 	github.com/pires/go-proxyproto v0.15.0
-	github.com/quic-go/quic-go v0.61.0
+	github.com/quic-go/quic-go v0.62.0
 	github.com/refraction-networking/utls v1.8.3-0.20260802151714-23b1dac19c06
-	github.com/sagernet/sing v0.9.0-beta.4
-	github.com/sagernet/sing-mux v0.3.5
-	github.com/sagernet/sing-quic v0.7.0-beta.4
-	github.com/sagernet/sing-shadowsocks v0.2.9
-	github.com/sagernet/sing-shadowsocks2 v0.2.2
-	github.com/sagernet/sing-snell v0.0.0-20260824011554-f8ab8029469a
+	github.com/sagernet/sing v0.9.3
+	github.com/sagernet/sing-mux v0.3.6
+	github.com/sagernet/sing-quic v0.7.0
+	github.com/sagernet/sing-shadowsocks v0.2.8
+	github.com/sagernet/sing-shadowsocks2 v0.2.1
+	github.com/sagernet/sing-snell v0.0.0-20260904135315-bc5a12ac736f
 	github.com/seiflotfy/cuckoofilter v0.0.0-20240715131351-a2f2c23f1771
 	github.com/stretchr/testify v1.12.1
 	github.com/v2fly/BrowserBridge v0.0.0-20210430233438-0570fc1d7d08
@@ -38,10 +38,10 @@ require (
 	github.com/yosida95/uritemplate/v3 v3.0.2
 	go.uber.org/mock v0.6.0
 	go4.org/netipx v0.0.0-20260823151212-3075585bcbeb
-	golang.org/x/crypto v0.55.0
-	golang.org/x/net v0.58.0
-	golang.org/x/sync v0.22.0
-	golang.org/x/sys v0.47.0
+	golang.org/x/crypto v0.57.0
+	golang.org/x/net v0.59.0
+	golang.org/x/sync v0.23.0
+	golang.org/x/sys v0.48.0
 	golang.zx2c4.com/wireguard v0.0.0-20260522210424-ecfc5a8d5446
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.12
@@ -58,7 +58,7 @@ require (
 	github.com/gofrs/uuid/v5 v5.5.1 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/hashicorp/yamux v0.1.2 // indirect
-	github.com/klauspost/compress v1.19.2 // indirect
+	github.com/klauspost/compress v1.20.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/lunixbochs/struc v0.0.0-20241101090106-8d528fa2c543 // indirect
 	github.com/metacubex/cpu v0.1.1 // indirect
@@ -70,13 +70,13 @@ require (
 	github.com/metacubex/randv2 v0.2.1-0.20260726125100-81aa96a9b1a5 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/riobard/go-bloom v0.0.0-20200614022211-cdc8013cb5b3 // indirect
-	github.com/sagernet/quic-go v0.61.0-sing-box-mod.6 // indirect
+	github.com/sagernet/quic-go v0.61.0-sing-box-mod.7 // indirect
 	github.com/sagernet/smux v1.5.50-sing-box-mod.1 // indirect
 	github.com/xtaci/smux v1.5.57 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/exp v0.0.0-20260820122028-d6e0b57b1a69 // indirect
-	golang.org/x/text v0.41.0 // indirect
-	golang.org/x/time v0.15.0 // indirect
+	golang.org/x/exp v0.0.0-20260908205506-85c1c2202aba // indirect
+	golang.org/x/text v0.42.0 // indirect
+	golang.org/x/time v0.16.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260825221802-da73d73af1c5 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260908043556-f8649ddbbfe6 // indirect
 )

@@ -56,7 +56,7 @@ func NewClient(ctx context.Context, config *ClientConfig) (*Outbound, error) {
 		},
 		udpOverStream: config.UdpOverStream,
 	}
-	uuid, err := uuid.ParseString(config.Uuid)
+	uuid, err := uuid.ParseHexDashString(config.Uuid)
 	if err != nil {
 		return nil, newError(err, "invalid uuid")
 	}

@@ -15,6 +15,8 @@ import (
 	core "github.com/exclavenetwork/exclave-core/v5"
 	"github.com/exclavenetwork/exclave-core/v5/app/proxyman/outbound"
 	"github.com/exclavenetwork/exclave-core/v5/common"
+	"github.com/exclavenetwork/exclave-core/v5/common/buf"
+	"github.com/exclavenetwork/exclave-core/v5/common/bytespool"
 	v2net "github.com/exclavenetwork/exclave-core/v5/common/net"
 	"github.com/exclavenetwork/exclave-core/v5/common/session"
 	"github.com/exclavenetwork/exclave-core/v5/common/singbridge"
@@ -52,6 +54,7 @@ type Outbound struct {
 	userKey      []byte
 	obfsMode     snell.ObfsMode
 	obfsHost     string
+	obfsURI      string
 	version      uint32
 	reuse        bool
 	mode         snellv6.Mode
@@ -87,12 +90,19 @@ func NewClient(ctx context.Context, config *ClientConfig) (*Outbound, error) {
 			if config.ObfsHost != "" {
 				return nil, newError(`invalid obfsHost for obfsMode "none"`)
 			}
+			if config.ObfsUri != "" {
+				return nil, newError(`invalid ObfsURI for obfsMode "none"`)
+			}
 		case "http":
 			outbound.obfsMode = snell.ObfsModeHTTP
 			outbound.obfsHost = config.ObfsHost
+			outbound.obfsURI = config.ObfsUri
 		case "tls":
 			outbound.obfsMode = snell.ObfsModeTLS
 			outbound.obfsHost = config.ObfsHost
+			if config.ObfsUri != "" {
+				return nil, newError(`invalid ObfsURI for obfsMode "tls"`)
+			}
 		default:
 			return nil, newError("invalid snell obfsMode: ", config.ObfsMode)
 		}
@@ -217,6 +227,26 @@ func (o *Outbound) Process(ctx context.Context, link *transport.Link, dialer int
 		if err != nil {
 			return err
 		}
+
+		// for server-speaks-first protocols
+		var firstPayload []byte
+		if reader, ok := link.Reader.(buf.TimeoutReader); ok {
+			if mb, _ := reader.ReadMultiBufferTimeout(proxy.FirstPayloadTimeout); mb != nil {
+				length := mb.Len()
+				firstPayload = bytespool.Alloc(length)
+				mb, _ = buf.SplitBytes(mb, firstPayload)
+				firstPayload = firstPayload[:length]
+				buf.ReleaseMulti(mb)
+			}
+		}
+		_, err = serverConn.Write(firstPayload)
+		if firstPayload != nil {
+			bytespool.Free(firstPayload)
+		}
+		if err != nil {
+			return singbridge.ReturnError(err)
+		}
+
 		return singbridge.ReturnError(bufio.CopyConn(detachedCtx, singbridge.NewPipeConnWrapper(link), serverConn))
 	} else {
 		rawConn, err := dialer.Dial(detachedCtx, o.serverAddr)

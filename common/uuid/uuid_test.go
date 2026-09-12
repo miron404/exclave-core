@@ -25,22 +25,41 @@ func TestParseBytes(t *testing.T) {
 	}
 }
 
-func TestParseString(t *testing.T) {
-	str := "2418d087-648d-4990-86e8-19dca1d006d3"
+func TestParseHexDashString(t *testing.T) {
 	expectedBytes := []byte{0x24, 0x18, 0xd0, 0x87, 0x64, 0x8d, 0x49, 0x90, 0x86, 0xe8, 0x19, 0xdc, 0xa1, 0xd0, 0x06, 0xd3}
 
-	uuid, err := ParseString(str)
+	uuid, err := ParseHexDashString("2418d087-648d-4990-86e8-19dca1d006d3")
 	common.Must(err)
 	if r := cmp.Diff(expectedBytes, uuid.Bytes()); r != "" {
 		t.Fatal(r)
 	}
 
-	_, err = ParseString("2418d087")
+	_, err = ParseHexDashString("2418d087-648k-4990-86e8-19dca1d006d3")
 	if err == nil {
 		t.Fatal("Expect error but nil")
 	}
 
-	_, err = ParseString("2418d087-648k-4990-86e8-19dca1d006d3")
+	_, err = ParseHexDashString("2418d087")
+	if err == nil {
+		t.Fatal("Expect error but nil")
+	}
+
+	_, err = ParseHexDashString("2418d087648d499086e819dca1d006d3")
+	if err == nil {
+		t.Fatal("Expect error but nil")
+	}
+
+	_, err = ParseHexDashString("-2418d087-648d-4990-86e8-19dca1d006d3")
+	if err == nil {
+		t.Fatal("Expect error but nil")
+	}
+
+	_, err = ParseHexDashString("2418d087-648d499086e819dca1d006d30")
+	if err == nil {
+		t.Fatal("Expect error but nil")
+	}
+
+	_, err = ParseHexDashString("2418d087-648d-4990-86e8-19dca1d006d3shit")
 	if err == nil {
 		t.Fatal("Expect error but nil")
 	}
@@ -78,5 +97,54 @@ func TestEquals(t *testing.T) {
 	uuid3 := New()
 	if uuid.Equals(&uuid3) {
 		t.Error("nil uuid equals non-nil uuid")
+	}
+}
+
+func TestParseV2RayStupidString(t *testing.T) {
+	expectedBytes := []byte{0x24, 0x18, 0xd0, 0x87, 0x64, 0x8d, 0x49, 0x90, 0x86, 0xe8, 0x19, 0xdc, 0xa1, 0xd0, 0x06, 0xd3}
+
+	uuid, err := ParseHexDashString("2418d087-648d-4990-86e8-19dca1d006d3")
+	common.Must(err)
+	if r := cmp.Diff(expectedBytes, uuid.Bytes()); r != "" {
+		t.Fatal(r)
+	}
+
+	uuid, err = ParseString("2418d087648d499086e819dca1d006d3")
+	common.Must(err)
+	if r := cmp.Diff(expectedBytes, uuid.Bytes()); r != "" {
+		t.Fatal(r)
+	}
+
+	uuid, err = ParseString("-2418d087-648d-4990-86e8-19dca1d006d3")
+	common.Must(err)
+	if r := cmp.Diff(expectedBytes, uuid.Bytes()); r != "" {
+		t.Fatal(r)
+	}
+
+	uuid, err = ParseString("2418d087-648d499086e819dca1d006d30")
+	common.Must(err)
+	if r := cmp.Diff(expectedBytes, uuid.Bytes()); r != "" {
+		t.Fatal(r)
+	}
+
+	uuid, err = ParseString("2418d087-648d-4990-86e8-19dca1d006d3shit")
+	common.Must(err)
+	if r := cmp.Diff(expectedBytes, uuid.Bytes()); r != "" {
+		t.Fatal(r)
+	}
+
+	_, err = ParseHexDashString("2418d087-648k-4990-86e8-19dca1d006d3")
+	if err == nil {
+		t.Fatal("Expect error but nil")
+	}
+
+	_, err = ParseHexDashString("2418d087")
+	if err == nil {
+		t.Fatal("Expect error but nil")
+	}
+
+	_, err = ParseHexDashString("2418d087648d499086e819dca1d006d3")
+	if err == nil {
+		t.Fatal("Expect error but nil")
 	}
 }

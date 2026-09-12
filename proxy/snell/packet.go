@@ -120,12 +120,16 @@ func (w *packetConnWrapper) Close() error {
 }
 
 func newServerConnWrapper(serverConn network.NetPacketConn) network.NetPacketConn {
-	frontHeadroom, _ := singcommon.Cast[network.FrontHeadroom](serverConn)
-	rearHeadroom, _ := singcommon.Cast[network.RearHeadroom](serverConn)
-	return &serverConnWrapper{
-		NetPacketConn: serverConn,
-		frontHeadroom: frontHeadroom,
-		rearHeadroom:  rearHeadroom,
+	frontHeadroom, ok1 := singcommon.Cast[network.FrontHeadroom](serverConn)
+	rearHeadroom, ok2 := singcommon.Cast[network.RearHeadroom](serverConn)
+	if ok1 && ok2 {
+		return &serverConnWrapper{
+			NetPacketConn: serverConn,
+			frontHeadroom: frontHeadroom,
+			rearHeadroom:  rearHeadroom,
+		}
+	} else {
+		return serverConn
 	}
 }
 

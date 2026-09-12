@@ -92,3 +92,27 @@ func ParseString(str string) (UUID, error) {
 
 	return uuid, nil
 }
+
+func ParseHexDashString(str string) (UUID, error) {
+	var dst UUID
+	b := []byte(str)
+	if len(b) != 36 || b[8] != '-' || b[13] != '-' || b[18] != '-' || b[23] != '-' {
+		return dst, errors.New("invalid UUID: ", str)
+	}
+	if _, err := hex.Decode(dst[0:4], b[0:8]); err != nil {
+		return dst, errors.New("invalid UUID: ", str)
+	}
+	if _, err := hex.Decode(dst[4:6], b[9:13]); err != nil {
+		return dst, errors.New("invalid UUID: ", str)
+	}
+	if _, err := hex.Decode(dst[6:8], b[14:18]); err != nil {
+		return dst, errors.New("invalid UUID: ", str)
+	}
+	if _, err := hex.Decode(dst[8:10], b[19:23]); err != nil {
+		return dst, errors.New("invalid UUID: ", str)
+	}
+	if _, err := hex.Decode(dst[10:16], b[24:36]); err != nil {
+		return dst, errors.New("invalid UUID: ", str)
+	}
+	return dst, nil
+}
