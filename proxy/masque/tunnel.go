@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	connectip "github.com/miron404/connect-ip-go"
@@ -85,9 +86,19 @@ type tunnel struct {
 	dropReported      sync.Once
 	oversizedReported sync.Once
 
+	// networkChanged carries a pending network change to the supervisor. It
+	// holds at most one: two changes before the supervisor looks call for the
+	// same response.
+	networkChanged chan struct{}
+
+	// pathGeneration moves whenever the session's path does, by a redial or
+	// by a migration, and restarts the path MTU search.
+	pathGeneration atomic.Uint32
+
 	// Progress of the path MTU search. Only the reading pump touches these.
-	bestDatagramMTU int
-	refusedSince    time.Time
+	searchGeneration uint32
+	bestDatagramMTU  int
+	refusedSince     time.Time
 }
 
 func newTunnel(ctx context.Context, o *Outbound, dialer internet.Dialer) (*tunnel, error) {
@@ -120,6 +131,8 @@ func newTunnel(ctx context.Context, o *Outbound, dialer internet.Dialer) (*tunne
 		done:        make(chan struct{}),
 		readBuffers: make([][]byte, 1),
 		readSizes:   make([]int, 1),
+
+		networkChanged: make(chan struct{}, 1),
 	}
 	for _, address := range addresses {
 		if address.Is4() {
@@ -133,6 +146,16 @@ func newTunnel(ctx context.Context, o *Outbound, dialer internet.Dialer) (*tunne
 		t.maintain(runCtx, o, dialer)
 	}()
 	return t, nil
+}
+
+// NetworkChanged tells the tunnel that the device moved to another network. The
+// session follows it if it can, and is redialed otherwise; the stack, and every
+// connection on it, is kept either way.
+func (t *tunnel) NetworkChanged() {
+	select {
+	case t.networkChanged <- struct{}{}:
+	default:
+	}
 }
 
 func (t *tunnel) Close() error {
@@ -227,6 +250,9 @@ func (t *tunnel) maintain(ctx context.Context, o *Outbound, dialer internet.Dial
 		// lives, so the dial context cannot simply be cancelled once the dial
 		// returns; it is handed to the session and released with it. Until then
 		// a timer bounds how long the setup may take.
+		// A dial is made on whatever network is current, so a change reported
+		// before it is already answered by it.
+		t.takeNetworkChange()
 		dialCtx, cancelDial := context.WithCancel(ctx)
 		dialTimer := time.AfterFunc(dialTimeout, cancelDial)
 		sess, err := o.dial(dialCtx, dialer)
@@ -240,10 +266,16 @@ func (t *tunnel) maintain(ctx context.Context, o *Outbound, dialer internet.Dial
 				err = newError("timed out after ", dialTimeout).Base(err)
 			}
 			newError("failed to establish the MASQUE tunnel").Base(err).AtWarning().WriteToLog()
-			if sleep(ctx, backoff) != nil {
+			changed, err := t.sleepUnlessNetworkChanges(ctx, backoff)
+			if err != nil {
 				return
 			}
-			backoff = min(backoff*2, reconnectDelayMax)
+			if changed {
+				// What failed on the old network says nothing about the new one.
+				backoff = reconnectDelayMin
+			} else {
+				backoff = min(backoff*2, reconnectDelayMax)
+			}
 			continue
 		}
 		sess.cancel = cancelDial
@@ -263,7 +295,7 @@ func (t *tunnel) maintain(ctx context.Context, o *Outbound, dialer internet.Dial
 		var wg sync.WaitGroup
 		wg.Add(2)
 		// A new connection starts its own search.
-		t.bestDatagramMTU, t.refusedSince = 0, time.Time{}
+		t.pathGeneration.Add(1)
 		// The reader must never write to the device: the stack hands packets
 		// out over an unbuffered channel that only the reader drains, so a
 		// write that makes the stack answer would wait on the reader itself.
@@ -288,7 +320,7 @@ func (t *tunnel) maintain(ctx context.Context, o *Outbound, dialer internet.Dial
 			errChan <- t.pumpFromTunnel(sess, o.useHTTP2)
 		}()
 
-		err = <-errChan
+		err = t.followSession(ctx, o, dialer, sess, errChan)
 		if ctx.Err() != nil {
 			cancelPumps()
 			sess.Close()
@@ -299,6 +331,50 @@ func (t *tunnel) maintain(ctx context.Context, o *Outbound, dialer internet.Dial
 		cancelPumps()
 		sess.Close()
 		waitPumps(&wg)
+	}
+}
+
+// followSession waits for the session to end, moving it onto the new network
+// each time the device changes networks. A session that cannot move ends
+// there, and the supervisor redials it once something wants to send, which on
+// an idle tunnel costs nothing until then.
+func (t *tunnel) followSession(ctx context.Context, o *Outbound, dialer internet.Dialer, sess *ipSession, errChan <-chan error) error {
+	for {
+		select {
+		case err := <-errChan:
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-t.networkChanged:
+			if err := o.migrate(ctx, dialer, sess); err != nil {
+				return newError("the network changed and the connection could not follow").Base(err)
+			}
+			// The new path starts its MTU search from the initial packet size.
+			t.pathGeneration.Add(1)
+		}
+	}
+}
+
+// takeNetworkChange clears a pending network change.
+func (t *tunnel) takeNetworkChange() {
+	select {
+	case <-t.networkChanged:
+	default:
+	}
+}
+
+// sleepUnlessNetworkChanges waits for d, or less if the network changes. It
+// reports whether it did.
+func (t *tunnel) sleepUnlessNetworkChanges(ctx context.Context, d time.Duration) (bool, error) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false, ctx.Err()
+	case <-t.networkChanged:
+		return true, nil
+	case <-timer.C:
+		return false, nil
 	}
 }
 
@@ -398,6 +474,11 @@ func (t *tunnel) noteOversizedPacket(size, fits int, discovering bool) {
 			" which carries at most ", fits).AtWarning().WriteToLog()
 	})
 
+	if generation := t.pathGeneration.Load(); generation != t.searchGeneration {
+		// The path changed under the search, so what it learned is void.
+		t.searchGeneration = generation
+		t.bestDatagramMTU, t.refusedSince = 0, time.Time{}
+	}
 	now := time.Now()
 	if fits > t.bestDatagramMTU {
 		t.bestDatagramMTU = fits

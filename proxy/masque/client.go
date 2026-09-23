@@ -180,16 +180,34 @@ func (o *Outbound) lowerMTU(mtu int) {
 	}
 }
 
-// InterfaceUpdate drops the tunnel when the underlying network changes, so the
-// next request rebuilds it over the new interface.
+// InterfaceUpdate follows the device onto another network. The tunnel's stack
+// is kept, so the connections running over it outlive the change: the session
+// underneath is moved to the new network, or redialed when it cannot be.
+//
+// Only a tunnel resized for the old path is rebuilt. An MTU learned there says
+// nothing about the new one, and it only ever goes down, so without this a
+// single bad network would hold the tunnel down until the process restarts; and
+// a stack's link MTU is fixed when it is made.
 func (o *Outbound) InterfaceUpdate() {
-	// An MTU learned from the old path says nothing about the new one, and it
-	// only ever goes down, so without this a single bad network would hold the
-	// tunnel down until the process restarts.
 	o.tunnelAccess.Lock()
 	o.mtu = o.configuredMTU
+	t := o.tunnel
+	rebuild := t != nil && t.mtu != o.configuredMTU
+	if rebuild {
+		o.tunnel = nil
+	}
 	o.tunnelAccess.Unlock()
-	_ = o.Close()
+	if t == nil {
+		return
+	}
+	if rebuild {
+		newError("the network changed, rebuilding the tunnel at an MTU of ", o.configuredMTU).AtInfo().WriteToLog()
+		go func() {
+			_ = t.Close()
+		}()
+		return
+	}
+	t.NetworkChanged()
 }
 
 func (o *Outbound) Close() error {

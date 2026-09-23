@@ -50,6 +50,16 @@ const (
 	// clientCertValidity matches the official client; the certificate only
 	// carries the enrolled key, so a short lifetime costs nothing.
 	clientCertValidity = 24 * time.Hour
+
+	// migrationProbeTimeout bounds how long a new path is probed before the
+	// session is given up and redialed instead. Probes back off exponentially
+	// from 200ms, so this is a handful of packets at most.
+	migrationProbeTimeout = 5 * time.Second
+	// maxMigrations bounds the sockets one session collects. quic-go keeps
+	// listening on every transport a connection has used, and closing one
+	// closes the connection, so each move holds a socket until the session
+	// ends. Past this, a network change redials instead, which releases them.
+	maxMigrations = 4
 )
 
 // accessDeniedHint explains the endpoint rejecting the enrolled key.
@@ -188,6 +198,15 @@ type ipSession struct {
 	quicConn      *quic.Conn
 	quicTransport *quic.Transport
 	packetConn    gonet.PacketConn
+	// migrations are the paths the connection was moved onto, in order.
+	migrations []migratedPath
+}
+
+// migratedPath is a socket a QUIC connection was moved onto, and the transport
+// reading it.
+type migratedPath struct {
+	transport  *quic.Transport
+	packetConn gonet.PacketConn
 }
 
 func (s *ipSession) Close() {
@@ -217,6 +236,65 @@ func (s *ipSession) Close() {
 	if s.packetConn != nil {
 		_ = s.packetConn.Close()
 	}
+	for _, path := range s.migrations {
+		_ = path.transport.Close()
+		_ = path.packetConn.Close()
+	}
+}
+
+// migrate moves a QUIC session onto a socket opened on the current network.
+// The connection is kept, and with it the CONNECT-IP session, the addresses in
+// the tunnel and every flow running over them.
+//
+// It costs no handshake: the new path is validated with PATH_CHALLENGE frames
+// and the connection switches to it once the endpoint answers. quic-go then
+// resets the congestion controller and restarts path MTU discovery from the
+// initial packet size, since nothing learned about the old path holds on the
+// new one.
+//
+// On failure the connection may already be unusable, since the socket is
+// registered with it, so the caller is expected to redial.
+func (o *Outbound) migrate(ctx context.Context, dialer internet.Dialer, sess *ipSession) error {
+	if sess.quicConn == nil {
+		return newError("an HTTP/2 connection cannot move to another network")
+	}
+	if !sess.canDiscoverPathMTU {
+		// The socket belongs to another outbound, which follows network
+		// changes on its own.
+		return newError("the connection runs through another outbound")
+	}
+	if len(sess.migrations) >= maxMigrations {
+		return newError("the connection has already moved ", len(sess.migrations), " times")
+	}
+	ctx, cancel := context.WithTimeout(ctx, migrationProbeTimeout)
+	defer cancel()
+
+	endpoint := sess.quicConn.RemoteAddr()
+	packetConn, _, isSocket, err := listenPacket(ctx, dialer, o.endpoint(net.Network_UDP), endpoint)
+	if err != nil {
+		return newError("failed to open a socket on the new network").Base(err)
+	}
+	if !isSocket {
+		_ = packetConn.Close()
+		return newError("the new network did not give a socket")
+	}
+	transport := &quic.Transport{Conn: packetConn, ConnectionIDLength: 20}
+	// Owned by the session from here on: once the connection is registered on
+	// the transport, closing it would close the connection.
+	sess.migrations = append(sess.migrations, migratedPath{transport: transport, packetConn: packetConn})
+
+	path, err := sess.quicConn.AddPath(transport)
+	if err != nil {
+		return newError("failed to add a path").Base(err)
+	}
+	if err := path.Probe(ctx); err != nil {
+		return newError("the endpoint did not answer on the new path").Base(err)
+	}
+	if err := path.Switch(); err != nil {
+		return newError("failed to switch to the new path").Base(err)
+	}
+	newError("QUIC connection moved to ", packetConn.LocalAddr()).AtInfo().WriteToLog()
+	return nil
 }
 
 // dial establishes a CONNECT-IP session over the configured transport.
