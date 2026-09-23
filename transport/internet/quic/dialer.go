@@ -180,15 +180,20 @@ func (c *clientConnections) openConnection(ctx context.Context, dest net.Destina
 		packetConn = internet.NewConnWrapper(rawConn)
 	}
 
-	sysConn, err := wrapSysConn(packetConn, streamSettings.ProtocolSettings.(*Config))
+	config := streamSettings.ProtocolSettings.(*Config)
+
+	sysConn, err := wrapSysConn(packetConn, config)
 	if err != nil {
 		rawConn.Close()
 		return nil, err
 	}
 
 	tr := quic.Transport{
-		Conn:               sysConn,
-		ConnectionIDLength: 12,
+		Conn: sysConn,
+	}
+
+	if config.ConnectionIdLength != nil {
+		tr.ConnectionIDLength = int(*config.ConnectionIdLength)
 	}
 
 	tlsConfig := tls.ConfigFromStreamSettings(streamSettings)
@@ -199,8 +204,10 @@ func (c *clientConnections) openConnection(ctx context.Context, dest net.Destina
 		}
 	}
 
-	tc, err := tlsConfig.GetTLSConfigWithContext(detachedContext, tls.WithDestination(dest))
+	// V2Ray <= 5.54.0 sends ALPN h2 and http/1.1
+	tc, err := tlsConfig.GetTLSConfigWithContext(detachedContext, tls.WithDestination(dest), tls.WithNextProto("h3"))
 	if err != nil {
+		sysConn.Close()
 		return nil, err
 	}
 

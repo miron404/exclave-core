@@ -244,6 +244,7 @@ func (o *Outbound) Process(ctx context.Context, link *transport.Link, dialer int
 			bytespool.Free(firstPayload)
 		}
 		if err != nil {
+			serverConn.Close()
 			return singbridge.ReturnError(err)
 		}
 
@@ -262,6 +263,7 @@ func (o *Outbound) Process(ctx context.Context, link *transport.Link, dialer int
 		if destination.Address.Family().IsDomain() {
 			addr, err = o.resolver(destination.Address.Domain())
 			if err != nil {
+				rawConn.Close()
 				return err
 			}
 		}

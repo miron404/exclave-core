@@ -114,17 +114,22 @@ func Listen(ctx context.Context, address net.Address, port net.Port, streamSetti
 
 	conn, err := wrapSysConn(rawConn, config)
 	if err != nil {
-		conn.Close()
+		rawConn.Close()
 		return nil, err
 	}
 
 	tr := quic.Transport{
-		Conn:               conn,
-		ConnectionIDLength: 12,
+		Conn: conn,
 	}
 
-	qListener, err := tr.Listen(tlsConfig.GetTLSConfig(), quicConfig)
+	if config.ConnectionIdLength != nil {
+		tr.ConnectionIDLength = int(*config.ConnectionIdLength)
+	}
+
+	// V2Ray <= 5.54.0 sends ALPN h2 and http/1.1
+	qListener, err := tr.Listen(tlsConfig.GetTLSConfig(tls.WithNextProto("h3", "h2", "http/1.1")), quicConfig)
 	if err != nil {
+		tr.Close()
 		conn.Close()
 		return nil, err
 	}

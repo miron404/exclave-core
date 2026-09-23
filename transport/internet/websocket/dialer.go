@@ -17,7 +17,6 @@ import (
 	"github.com/exclavenetwork/exclave-core/v5/common/session"
 	"github.com/exclavenetwork/exclave-core/v5/features/extension"
 	"github.com/exclavenetwork/exclave-core/v5/transport/internet"
-	"github.com/exclavenetwork/exclave-core/v5/transport/internet/reality"
 	"github.com/exclavenetwork/exclave-core/v5/transport/internet/security"
 )
 
@@ -51,26 +50,11 @@ func dialWebsocket(ctx context.Context, dest net.Destination, streamSettings *in
 	protocol := "ws"
 
 	securityEngine, err := security.CreateSecurityEngineFromSettings(ctx, streamSettings)
-	realityConfig := reality.ConfigFromStreamSettings(streamSettings)
-	if err != nil && realityConfig == nil {
+	if err != nil {
 		return nil, newError("unable to create security engine").Base(err)
 	}
 
-	if realityConfig != nil {
-		protocol = "wss"
-
-		dialer.NetDialTLSContext = func(ctx context.Context, network, addr string) (gonet.Conn, error) {
-			conn, err := dialer.NetDial(network, addr)
-			if err != nil {
-				return nil, newError("dial REALITY connection failed").Base(err)
-			}
-			conn, err = reality.UClient(ctx, conn, dest, realityConfig)
-			if err != nil {
-				return nil, newError("unable to create REALITY client").Base(err)
-			}
-			return conn, nil
-		}
-	} else if securityEngine != nil {
+	if securityEngine != nil {
 		protocol = "wss"
 
 		dialer.NetDialTLSContext = func(ctx context.Context, network, addr string) (gonet.Conn, error) {
@@ -78,13 +62,14 @@ func dialWebsocket(ctx context.Context, dest net.Destination, streamSettings *in
 			if err != nil {
 				return nil, newError("dial TLS connection failed").Base(err)
 			}
-			conn, err = securityEngine.Client(conn,
+			securityConn, err := securityEngine.Client(conn,
 				security.OptionWithDestination{Dest: dest},
 				security.OptionWithALPN{ALPNs: []string{"http/1.1"}})
 			if err != nil {
+				conn.Close()
 				return nil, newError("unable to create security protocol client from security engine").Base(err)
 			}
-			return conn, nil
+			return securityConn, nil
 		}
 	}
 
