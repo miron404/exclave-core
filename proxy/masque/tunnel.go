@@ -69,6 +69,10 @@ type tunnel struct {
 	cancel   context.CancelFunc
 	done     chan struct{}
 
+	// The address families the stack was brought up with. IPv6 is left off
+	// when the MTU is below its minimum, whatever the device was assigned.
+	hasIPv4, hasIPv6 bool
+
 	// readMutex serializes device reads across reconnect cycles. It also covers
 	// the scratch the device read needs, which is reused rather than allocated
 	// for every packet.
@@ -117,6 +121,13 @@ func newTunnel(ctx context.Context, o *Outbound, dialer internet.Dialer) (*tunne
 		readBuffers: make([][]byte, 1),
 		readSizes:   make([]int, 1),
 	}
+	for _, address := range addresses {
+		if address.Is4() {
+			t.hasIPv4 = true
+		} else {
+			t.hasIPv6 = true
+		}
+	}
 	go func() {
 		defer close(t.done)
 		t.maintain(runCtx, o, dialer)
@@ -129,6 +140,14 @@ func (t *tunnel) Close() error {
 	err := t.device.Close()
 	<-t.done
 	return err
+}
+
+// carries reports whether the stack has an address of the family addr needs.
+func (t *tunnel) carries(addr netip.Addr) bool {
+	if addr.Is4() {
+		return t.hasIPv4
+	}
+	return t.hasIPv6
 }
 
 func (t *tunnel) DialContextTCPAddrPort(ctx context.Context, addr netip.AddrPort) (net.Conn, error) {

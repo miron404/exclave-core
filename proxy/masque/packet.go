@@ -49,14 +49,14 @@ func (r *packetReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
 
 // newPacketWriter resolves per-packet destinations, so a single UDP session can
 // address more than the destination the outbound was opened for.
-func newPacketWriter(conn net.Conn, o *Outbound, originalDestination, destination net.Destination, ipToDomain *sync.Map) buf.Writer {
+func newPacketWriter(conn net.Conn, t *tunnel, originalDestination, destination net.Destination, ipToDomain *sync.Map) buf.Writer {
 	packetConn, ok := conn.(net.PacketConn)
 	if !ok {
 		return buf.NewWriter(conn)
 	}
 	return &packetWriter{
 		packetConn:          packetConn,
-		outbound:            o,
+		tunnel:              t,
 		originalDestination: originalDestination,
 		destination:         destination,
 		ipToDomain:          ipToDomain,
@@ -65,7 +65,7 @@ func newPacketWriter(conn net.Conn, o *Outbound, originalDestination, destinatio
 
 type packetWriter struct {
 	packetConn          net.PacketConn
-	outbound            *Outbound
+	tunnel              *tunnel
 	originalDestination net.Destination
 	destination         net.Destination
 	ipToDomain          *sync.Map
@@ -86,7 +86,7 @@ func (w *packetWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
 				// Already resolved when the session was opened.
 				destination.Address = w.destination.Address
 			} else {
-				resolved, err := w.outbound.resolve(destination)
+				resolved, err := w.tunnel.resolve(destination)
 				if err != nil {
 					return err
 				}

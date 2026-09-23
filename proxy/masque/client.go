@@ -57,8 +57,6 @@ type Outbound struct {
 	endpointPublicKey *ecdsa.PublicKey
 
 	localAddresses []netip.Addr
-	hasIPv4        bool
-	hasIPv6        bool
 
 	policyManager policy.Manager
 	dns           dns.Client
@@ -116,11 +114,6 @@ func NewClient(ctx context.Context, config *ClientConfig) (*Outbound, error) {
 			return nil, newError("failed to parse the assigned address ", address).Base(err)
 		}
 		o.localAddresses = append(o.localAddresses, addr)
-		if addr.Is4() {
-			o.hasIPv4 = true
-		} else {
-			o.hasIPv6 = true
-		}
 	}
 	if len(o.localAddresses) == 0 {
 		return nil, newError("no address is assigned to the tunnel")
@@ -216,13 +209,18 @@ func (o *Outbound) Close() error {
 
 // resolve maps a domain destination onto an address reachable inside the
 // tunnel, honouring the configured domain strategy.
-func (o *Outbound) resolve(destination net.Destination) (net.Destination, error) {
+//
+// The families asked for are the ones this tunnel actually carries rather than
+// the ones assigned to the device: a tunnel resized below the IPv6 minimum has
+// left its IPv6 address off, and an AAAA answer would then be undialable.
+func (t *tunnel) resolve(destination net.Destination) (net.Destination, error) {
 	if !destination.Address.Family().IsDomain() {
 		return destination, nil
 	}
+	o := t.outbound
 	ips, err := dns.LookupIPWithOption(o.dns, destination.Address.Domain(), dns.IPOption{
-		IPv4Enable: o.hasIPv4 && o.domainStrategy != ClientConfig_USE_IP6,
-		IPv6Enable: o.hasIPv6 && o.domainStrategy != ClientConfig_USE_IP4,
+		IPv4Enable: t.hasIPv4 && o.domainStrategy != ClientConfig_USE_IP6,
+		IPv6Enable: t.hasIPv6 && o.domainStrategy != ClientConfig_USE_IP4,
 	})
 	if err != nil {
 		return destination, newError("failed to look up ", destination.Address.Domain()).Base(err)
@@ -257,7 +255,7 @@ func (o *Outbound) Process(ctx context.Context, link *transport.Link, dialer int
 		return err
 	}
 
-	destination, err := o.resolve(originalDestination)
+	destination, err := tunnel.resolve(originalDestination)
 	if err != nil {
 		return err
 	}
@@ -276,6 +274,10 @@ func (o *Outbound) Process(ctx context.Context, link *transport.Link, dialer int
 	address := toNetIPAddr(destination.Address)
 	if !address.IsValid() {
 		return newError("cannot route ", destination.Address, " through the tunnel")
+	}
+	if !tunnel.carries(address) {
+		return newError("cannot route ", destination.Address, " through the tunnel: ",
+			"it carries no address of that family on this path")
 	}
 	addrPort := netip.AddrPortFrom(address, destination.Port.Value())
 	var requestFunc func() error
@@ -306,7 +308,7 @@ func (o *Outbound) Process(ctx context.Context, link *transport.Link, dialer int
 		ipToDomain := new(sync.Map)
 		requestFunc = func() error {
 			defer timer.SetTimeout(p.Timeouts.DownlinkOnly)
-			return buf.Copy(link.Reader, newPacketWriter(conn, o, originalDestination, destination, ipToDomain), buf.UpdateActivity(timer))
+			return buf.Copy(link.Reader, newPacketWriter(conn, tunnel, originalDestination, destination, ipToDomain), buf.UpdateActivity(timer))
 		}
 		responseFunc = func() error {
 			defer timer.SetTimeout(p.Timeouts.UplinkOnly)
