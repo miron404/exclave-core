@@ -1,0 +1,48 @@
+name: MASQUE
+
+# The upstream test workflow only runs on main, so nothing tests the MASQUE
+# branch otherwise. This covers the packages it adds or changes, under the race
+# detector, since most of what can go wrong there is two pumps and a teardown
+# racing each other.
+
+on:
+  push:
+    branches:
+      - masque
+    paths:
+      - "proxy/masque/**"
+      - "proxy/wireguard/netstack/**"
+      - "infra/conf/v4/masque.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/masque.yml"
+  pull_request:
+    branches:
+      - masque
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout codebase
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ~1.27
+          cache-dependency-path: ./go.sum
+
+      - name: Vet
+        run: go vet ./proxy/masque/... ./proxy/wireguard/netstack/...
+
+      - name: Run tests
+        run: go test -race -count=1 ./proxy/masque/... ./proxy/wireguard/netstack/... ./infra/conf/v4/...
+
+      - name: Build for Android
+        env:
+          GOOS: android
+          GOARCH: arm64
+          CGO_ENABLED: "0"
+        run: go build -tags with_clash ./main/distro/all
