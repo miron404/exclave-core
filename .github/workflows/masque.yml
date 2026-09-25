@@ -1,9 +1,9 @@
 name: MASQUE
 
 # The upstream test workflow only runs on main, so nothing tests the MASQUE
-# branch otherwise. This covers the packages it adds or changes, under the race
-# detector, since most of what can go wrong there is two pumps and a teardown
-# racing each other.
+# branch otherwise. This covers the packages it adds or changes, the loopback
+# fix included, under the race detector, since most of what can go wrong there
+# is two pumps and a teardown racing each other.
 #
 # The tags are the ones the app builds with. http2legacy picks which HTTP/2
 # client golang.org/x/net carries, and the HTTP/2 mode runs on that one.
@@ -15,6 +15,7 @@ on:
     paths:
       - "proxy/masque/**"
       - "proxy/wireguard/netstack/**"
+      - "proxy/loopback/**"
       - "infra/conf/v4/masque.go"
       - "go.mod"
       - "go.sum"
@@ -38,10 +39,10 @@ jobs:
           cache-dependency-path: ./go.sum
 
       - name: Vet
-        run: go vet -tags http2legacy ./proxy/masque/... ./proxy/wireguard/netstack/...
+        run: go vet -tags http2legacy ./proxy/masque/... ./proxy/wireguard/netstack/... ./proxy/loopback/...
 
       - name: Run tests
-        run: go test -race -count=1 -tags http2legacy ./proxy/masque/... ./proxy/wireguard/netstack/... ./infra/conf/v4/...
+        run: go test -race -count=1 -tags http2legacy ./proxy/masque/... ./proxy/wireguard/netstack/... ./proxy/loopback/... ./infra/conf/v4/...
 
       - name: Build for Android
         env:

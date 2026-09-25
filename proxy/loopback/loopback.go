@@ -38,9 +38,16 @@ func (l *Loopback) Process(ctx context.Context, link *transport.Link, _ internet
 	dialDest := destination
 	content := new(session.Content)
 	ctx = session.ContextWithContent(ctx, content)
-	inbound := session.InboundFromContext(ctx)
+	// A connection dialed on behalf of the core itself, such as an
+	// observatory probe through a chain whose first hop is this outbound,
+	// carries no inbound. The one a connection does carry is shared with the
+	// inbound that accepted it, so it is copied rather than retagged in place.
+	var inbound session.Inbound
+	if original := session.InboundFromContext(ctx); original != nil {
+		inbound = *original
+	}
 	inbound.Tag = l.config.InboundTag
-	ctx = session.ContextWithInbound(ctx, inbound)
+	ctx = session.ContextWithInbound(ctx, &inbound)
 	rawConn, err := l.dispatcherInstance.Dispatch(ctx, dialDest)
 	if err != nil {
 		return newError("failed to open connection to ", destination).Base(err)
