@@ -5,8 +5,10 @@ name: MASQUE
 # fix included, under the race detector, since most of what can go wrong there
 # is two pumps and a teardown racing each other.
 #
-# The tags are the ones the app builds with. http2legacy picks which HTTP/2
-# client golang.org/x/net carries, and the HTTP/2 mode runs on that one.
+# The tags are the ones the app builds with. Since Go 1.27, golang.org/x/net's
+# HTTP/2 client is a wrapper around net/http's own unless http2legacy is set,
+# and the HTTP/2 mode runs on whichever one that picks. The app no longer sets
+# it, so neither does this.
 
 on:
   push:
@@ -39,14 +41,14 @@ jobs:
           cache-dependency-path: ./go.sum
 
       - name: Vet
-        run: go vet -tags http2legacy ./proxy/masque/... ./proxy/wireguard/netstack/... ./proxy/loopback/...
+        run: go vet ./proxy/masque/... ./proxy/wireguard/netstack/... ./proxy/loopback/...
 
       - name: Run tests
-        run: go test -race -count=1 -tags http2legacy ./proxy/masque/... ./proxy/wireguard/netstack/... ./proxy/loopback/... ./infra/conf/v4/...
+        run: go test -race -count=1 ./proxy/masque/... ./proxy/wireguard/netstack/... ./proxy/loopback/... ./infra/conf/v4/...
 
       - name: Build for Android
         env:
           GOOS: android
           GOARCH: arm64
           CGO_ENABLED: "0"
-        run: go build -tags with_clash,http2legacy ./main/distro/all
+        run: go build -tags with_clash ./main/distro/all

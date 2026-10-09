@@ -3,24 +3,45 @@ package reality
 import (
 	"context"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/exclavenetwork/reality"
 	"github.com/pires/go-proxyproto"
+	utls "github.com/refraction-networking/utls"
 
 	"github.com/exclavenetwork/exclave-core/v5/transport/internet"
 )
 
-type option func(*reality.Config)
+type option func(any)
 
 func WithNextProto(alpn ...string) option {
-	return func(config *reality.Config) {
-		config.NextProtos = alpn
+	return func(config any) {
+		switch config := config.(type) {
+		case *reality.Config:
+			config.NextProtos = alpn
+		case *utls.Config:
+			config.NextProtos = alpn
+		default:
+			panic("unknown config type")
+		}
 	}
 }
 
 type Conn struct {
 	*reality.Conn
+	suppressCloseNotify atomic.Bool
+}
+
+func (c *Conn) SuppressCloseNotify() {
+	c.suppressCloseNotify.Store(true)
+}
+
+func (c *Conn) Close() error {
+	if c.suppressCloseNotify.Load() {
+		return c.Conn.NetConn().Close()
+	}
+	return c.Conn.Close()
 }
 
 func (c *Config) GetREALITYConfig() *reality.Config {

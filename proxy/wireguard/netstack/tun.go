@@ -195,6 +195,7 @@ func (tun *netTun) WriteNotify() {
 	select {
 	case tun.incomingPacket <- view:
 	case <-tun.closed:
+		view.Release()
 	}
 }
 

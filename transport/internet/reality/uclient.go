@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	utls "github.com/refraction-networking/utls"
@@ -29,10 +30,22 @@ import (
 
 type UConn struct {
 	*utls.UConn
-	serverName  string
-	authKey     []byte
-	mldsaVerify *mldsaVerify
-	verified    bool
+	serverName          string
+	authKey             []byte
+	mldsaVerify         *mldsaVerify
+	verified            bool
+	suppressCloseNotify atomic.Bool
+}
+
+func (c *UConn) SuppressCloseNotify() {
+	c.suppressCloseNotify.Store(true)
+}
+
+func (c *UConn) Close() error {
+	if c.suppressCloseNotify.Load() {
+		return c.UConn.NetConn().Close()
+	}
+	return c.UConn.Close()
 }
 
 func (c *UConn) verifyConnection(state utls.ConnectionState) error {
@@ -68,7 +81,7 @@ func (c *UConn) verifyConnection(state utls.ConnectionState) error {
 	return nil
 }
 
-func uclient(ctx context.Context, conn net.Conn, dest net.Destination, config *Config) (net.Conn, error) {
+func uclient(ctx context.Context, conn net.Conn, dest net.Destination, config *Config, opts ...option) (net.Conn, error) {
 	uConn := &UConn{}
 	if len(config.Mldsa65Verify) > 0 {
 		mldsaVerify, err := newMLDSA65Verify(config.Mldsa65Verify)
@@ -78,7 +91,6 @@ func uclient(ctx context.Context, conn net.Conn, dest net.Destination, config *C
 		uConn.mldsaVerify = mldsaVerify
 	}
 	utlsConfig := &utls.Config{
-		NextProtos:             []string{"h2", "http/1.1"}, // for utls.HelloGolang
 		VerifyConnection:       uConn.verifyConnection,
 		ServerName:             config.ServerName,
 		InsecureSkipVerify:     true,
@@ -96,16 +108,36 @@ func uclient(ctx context.Context, conn net.Conn, dest net.Destination, config *C
 	if err := uConn.BuildHandshakeState(); err != nil {
 		return nil, newError("REALITY: unable to build client hello").Base(err)
 	}
-	if config.DisableX25519Mlkem768 {
+	if *fingerprint == utls.HelloGolang {
+		if config.DisableX25519Mlkem768 {
+			utlsConfig.CurvePreferences = []utls.CurveID{utls.X25519, utls.CurveP256, utls.CurveP384, utls.CurveP521}
+		}
+		for _, opt := range opts {
+			opt(utlsConfig)
+		}
+		if hello := uConn.HandshakeState.Hello; hello.Raw == nil {
+			raw, err := hello.Marshal()
+			if err != nil {
+				return nil, err
+			}
+			hello.Raw = raw
+		}
+	} else if config.DisableX25519Mlkem768 {
 		for _, extension := range uConn.Extensions {
 			if ext, ok := extension.(*utls.SupportedCurvesExtension); ok {
 				ext.Curves = slices.DeleteFunc(ext.Curves, func(curveID utls.CurveID) bool {
-					return curveID == utls.X25519MLKEM768
+					return curveID == utls.X25519MLKEM768 ||
+						curveID == 4587 /* utls.SecP256r1MLKEM768 */ ||
+						curveID == 4589 /* utls.SecP384r1MLKEM1024 */ ||
+						curveID == utls.X25519Kyber768Draft00
 				})
 			}
 			if ext, ok := extension.(*utls.KeyShareExtension); ok {
 				ext.KeyShares = slices.DeleteFunc(ext.KeyShares, func(share utls.KeyShare) bool {
-					return share.Group == utls.X25519MLKEM768
+					return share.Group == utls.X25519MLKEM768 ||
+						share.Group == 4587 /* utls.SecP256r1MLKEM768 */ ||
+						share.Group == 4589 /* utls.SecP384r1MLKEM1024 */ ||
+						share.Group == utls.X25519Kyber768Draft00
 				})
 			}
 		}
@@ -114,14 +146,6 @@ func uclient(ctx context.Context, conn net.Conn, dest net.Destination, config *C
 		}
 	}
 	hello := uConn.HandshakeState.Hello
-	if hello.Raw == nil {
-		// utls.HelloGolang
-		var err error
-		hello.Raw, err = hello.Marshal()
-		if err != nil {
-			return nil, err
-		}
-	}
 	hello.SessionId = make([]byte, 32)
 	copy(hello.Raw[39:], hello.SessionId) // the fixed location of `Session ID`
 	hello.SessionId[0] = 25               // Version_x
