@@ -104,10 +104,14 @@ type ClientConfig struct {
 	// HTTP/2 liveness check period in seconds. A connection that has received
 	// nothing for this long is pinged, and dropped if the ping goes unanswered.
 	// 0 leaves the connection unchecked.
-	Http2PingPeriod uint32                      `protobuf:"varint,14,opt,name=http2_ping_period,json=http2PingPeriod,proto3" json:"http2_ping_period,omitempty"`
-	DomainStrategy  ClientConfig_DomainStrategy `protobuf:"varint,13,opt,name=domain_strategy,json=domainStrategy,proto3,enum=exclave.core.proxy.masque.ClientConfig_DomainStrategy" json:"domain_strategy,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	Http2PingPeriod uint32 `protobuf:"varint,14,opt,name=http2_ping_period,json=http2PingPeriod,proto3" json:"http2_ping_period,omitempty"`
+	// TCP keepalive period of the HTTP/2 connection in seconds, the time it may
+	// sit idle before the kernel probes it. 0 selects the default, a negative
+	// value turns the probes off.
+	TcpKeepalivePeriod int32                       `protobuf:"varint,15,opt,name=tcp_keepalive_period,json=tcpKeepalivePeriod,proto3" json:"tcp_keepalive_period,omitempty"`
+	DomainStrategy     ClientConfig_DomainStrategy `protobuf:"varint,13,opt,name=domain_strategy,json=domainStrategy,proto3,enum=exclave.core.proxy.masque.ClientConfig_DomainStrategy" json:"domain_strategy,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ClientConfig) Reset() {
@@ -231,6 +235,13 @@ func (x *ClientConfig) GetHttp2PingPeriod() uint32 {
 	return 0
 }
 
+func (x *ClientConfig) GetTcpKeepalivePeriod() int32 {
+	if x != nil {
+		return x.TcpKeepalivePeriod
+	}
+	return 0
+}
+
 func (x *ClientConfig) GetDomainStrategy() ClientConfig_DomainStrategy {
 	if x != nil {
 		return x.DomainStrategy
@@ -242,7 +253,7 @@ var File_proxy_masque_config_proto protoreflect.FileDescriptor
 
 const file_proxy_masque_config_proto_rawDesc = "" +
 	"\n" +
-	"\x19proxy/masque/config.proto\x12\x19exclave.core.proxy.masque\x1a common/protoext/extensions.proto\x1a\x18common/net/address.proto\"\xf0\x05\n" +
+	"\x19proxy/masque/config.proto\x12\x19exclave.core.proxy.masque\x1a common/protoext/extensions.proto\x1a\x18common/net/address.proto\"\xa2\x06\n" +
 	"\fClientConfig\x12=\n" +
 	"\aaddress\x18\x01 \x01(\v2#.exclave.core.common.net.IPOrDomainR\aaddress\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\rR\x04port\x12H\n" +
@@ -259,7 +270,8 @@ const file_proxy_masque_config_proto_rawDesc = "" +
 	" \x01(\bR\rallowInsecure\x12)\n" +
 	"\x10keepalive_period\x18\v \x01(\rR\x0fkeepalivePeriod\x12.\n" +
 	"\x13initial_packet_size\x18\f \x01(\rR\x11initialPacketSize\x12*\n" +
-	"\x11http2_ping_period\x18\x0e \x01(\rR\x0fhttp2PingPeriod\x12_\n" +
+	"\x11http2_ping_period\x18\x0e \x01(\rR\x0fhttp2PingPeriod\x120\n" +
+	"\x14tcp_keepalive_period\x18\x0f \x01(\x05R\x12tcpKeepalivePeriod\x12_\n" +
 	"\x0fdomain_strategy\x18\r \x01(\x0e26.exclave.core.proxy.masque.ClientConfig.DomainStrategyR\x0edomainStrategy\"V\n" +
 	"\x0eDomainStrategy\x12\n" +
 	"\n" +

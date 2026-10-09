@@ -51,7 +51,10 @@ type Outbound struct {
 	// http2PingPeriod is how long the HTTP/2 connection may receive nothing
 	// before it is pinged. Zero leaves it unchecked.
 	http2PingPeriod time.Duration
-	domainStrategy  ClientConfig_DomainStrategy
+	// tcpKeepalivePeriod is how long the HTTP/2 connection may sit idle before
+	// the kernel probes it. Zero leaves it unprobed.
+	tcpKeepalivePeriod time.Duration
+	domainStrategy     ClientConfig_DomainStrategy
 
 	privateKey        *ecdsa.PrivateKey
 	endpointPublicKey *ecdsa.PublicKey
@@ -107,6 +110,12 @@ func NewClient(ctx context.Context, config *ClientConfig) (*Outbound, error) {
 	o.configuredMTU = o.mtu
 	if o.keepalivePeriod <= 0 {
 		o.keepalivePeriod = defaultKeepalivePeriod
+	}
+	switch {
+	case config.TcpKeepalivePeriod > 0:
+		o.tcpKeepalivePeriod = time.Duration(config.TcpKeepalivePeriod) * time.Second
+	case config.TcpKeepalivePeriod == 0:
+		o.tcpKeepalivePeriod = defaultTCPKeepalivePeriod
 	}
 	for _, address := range config.LocalAddress {
 		addr, err := netip.ParseAddr(address)

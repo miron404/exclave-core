@@ -48,6 +48,10 @@ message ClientConfig {
   // nothing for this long is pinged, and dropped if the ping goes unanswered.
   // 0 leaves the connection unchecked.
   uint32 http2_ping_period = 14;
+  // TCP keepalive period of the HTTP/2 connection in seconds, the time it may
+  // sit idle before the kernel probes it. 0 selects the default, a negative
+  // value turns the probes off.
+  int32 tcp_keepalive_period = 15;
 
   DomainStrategy domain_strategy = 13;
 }

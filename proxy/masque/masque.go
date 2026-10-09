@@ -51,6 +51,13 @@ const (
 	// carries the enrolled key, so a short lifetime costs nothing.
 	clientCertValidity = 24 * time.Hour
 
+	// defaultTCPKeepalivePeriod is how long the HTTP/2 connection may sit idle
+	// before the kernel probes it. Without one the core dialer leaves Go's
+	// default of 15 seconds, which woke the radio of an idle phone four times
+	// a minute, more often than the QUIC mode's pings. Four minutes keeps the
+	// mapping of most carrier NATs alive at a sixteenth of the wakeups.
+	defaultTCPKeepalivePeriod = 4 * time.Minute
+
 	// migrationProbeTimeout bounds how long a new path is probed before the
 	// session is given up and redialed instead. Probes back off exponentially
 	// from 200ms, so this is a handful of packets at most.
@@ -425,6 +432,7 @@ func (o *Outbound) http2Transport(dialer internet.Dialer, tlsConfig *tls.Config)
 			if err != nil {
 				return nil, err
 			}
+			o.tuneHTTP2Socket(conn)
 			tlsConn := tls.Client(conn, h2TLSConfig)
 			if err := tlsConn.HandshakeContext(ctx); err != nil {
 				_ = conn.Close()
