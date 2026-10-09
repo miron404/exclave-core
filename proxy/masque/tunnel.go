@@ -400,6 +400,7 @@ func (t *tunnel) pumpToTunnel(ctx context.Context, sess *ipSession, bufferPool *
 		if err == nil && len(icmp) == 0 {
 			// An ICMP answer means the packet was refused, not sent.
 			sess.counters.addWrite(n)
+			sess.liveness.sent()
 		}
 		if err != nil {
 			if errors.As(err, new(*connectip.CloseError)) {
@@ -443,6 +444,7 @@ func (t *tunnel) pumpFromTunnel(sess *ipSession, useHTTP2 bool) error {
 			continue
 		}
 		sess.counters.addRead(len(packet))
+		sess.liveness.heard()
 		if err := t.writePacket(scratch, packet); err != nil {
 			return err
 		}

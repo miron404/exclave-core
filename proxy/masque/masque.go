@@ -198,10 +198,13 @@ type ipSession struct {
 	// cancel releases the context the session was dialed with. The HTTP/2
 	// transport keeps the request alive for the lifetime of the tunnel, so this
 	// must not be called before the session is torn down.
-	cancel        context.CancelFunc
-	ipConn        *connectip.Conn
-	transport     *http3.Transport
-	h2Transport   *http2.Transport
+	cancel    context.CancelFunc
+	ipConn    *connectip.Conn
+	transport *http3.Transport
+	h2Conn    *http2.ClientConn
+	// liveness checks an HTTP/2 session that has sent and heard nothing
+	// back; nil over QUIC, whose keepalive does that already.
+	liveness      *liveness
 	quicConn      *quic.Conn
 	quicTransport *quic.Transport
 	packetConn    gonet.PacketConn
@@ -229,10 +232,9 @@ func (s *ipSession) Close() {
 	if s.transport != nil {
 		_ = s.transport.Close()
 	}
-	if s.h2Transport != nil {
-		// The tunnel owns its transport, so dropping the pooled TCP connection
-		// here keeps a reconnect from leaking the previous one.
-		s.h2Transport.CloseIdleConnections()
+	s.liveness.stop()
+	if s.h2Conn != nil {
+		_ = s.h2Conn.Close()
 	}
 	if s.quicConn != nil {
 		_ = s.quicConn.CloseWithError(0, "")
@@ -397,20 +399,39 @@ func (o *Outbound) dialHTTP3(ctx context.Context, dialer internet.Dialer, tlsCon
 
 // dialHTTP2 opens the tunnel over TCP+TLS/HTTP2, the fallback for networks that
 // block QUIC.
+//
+// The connection is made here and the request sent on it directly, rather than
+// through the transport's pool, so that the session holds the connection it
+// runs on: closing it is how the session is torn down, and pinging it is how
+// the session finds out the path has died.
 func (o *Outbound) dialHTTP2(ctx context.Context, dialer internet.Dialer, tlsConfig *tls.Config) (*ipSession, *http.Response, error) {
 	transport := o.http2Transport(dialer, tlsConfig)
-	client := &http.Client{Transport: transport}
-	ipConn, response, err := connectip.DialH2(ctx, client, uritemplate.MustNew(connectURI), http.Header{
+	conn, err := transport.DialTLSContext(ctx, "tcp", "", nil)
+	if err != nil {
+		return nil, nil, newError("failed to connect for HTTP/2").Base(err)
+	}
+	h2Conn, err := transport.NewClientConn(conn)
+	if err != nil {
+		_ = conn.Close()
+		return nil, nil, newError("failed to start HTTP/2").Base(err)
+	}
+	ipConn, response, err := connectip.DialH2(ctx, &http.Client{Transport: h2Conn}, uritemplate.MustNew(connectURI), http.Header{
 		"User-Agent":       []string{""},
 		"cf-connect-proto": []string{requestProtocol},
 		// TODO: post quantum key agreement is not implemented yet.
 		"pq-enabled": []string{"false"},
 	})
 	if err != nil {
-		transport.CloseIdleConnections()
+		_ = h2Conn.Close()
 		return nil, nil, newError("failed to dial connect-ip over HTTP/2").Base(err)
 	}
-	return &ipSession{ipConn: ipConn, h2Transport: transport}, response, nil
+	sess := &ipSession{ipConn: ipConn, h2Conn: h2Conn}
+	sess.liveness = newLiveness(h2Conn.Ping, func(err error) {
+		newError("the HTTP/2 connection stopped answering, reconnecting").Base(err).AtInfo().WriteToLog()
+		_ = ipConn.Close()
+		_ = h2Conn.Close()
+	})
+	return sess, response, nil
 }
 
 // http2Transport builds the transport the CONNECT-IP request runs on. It dials
@@ -422,10 +443,10 @@ func (o *Outbound) http2Transport(dialer internet.Dialer, tlsConfig *tls.Config)
 	h2TLSConfig.NextProtos = []string{"h2"}
 	return &http2.Transport{
 		DisableCompression: true,
-		// A silent TCP path is indistinguishable from an idle one: the tunnel
-		// request stays open, both pumps stay parked, and nothing fails, so the
-		// supervisor never learns to redial. A ping settles it, at the cost of
-		// a wakeup per period, which is why it is off unless asked for.
+		// A ping after this long without hearing anything. It costs a wakeup
+		// per period on an idle tunnel, which is why it is off unless asked
+		// for; the on-demand check in liveness.go covers a dead path without
+		// it.
 		ReadIdleTimeout: o.http2PingPeriod,
 		DialTLSContext: func(ctx context.Context, _, _ string, _ *tls.Config) (gonet.Conn, error) {
 			conn, err := dialer.Dial(ctx, destination)
