@@ -62,7 +62,7 @@ func TestHTTP2SocketIsTuned(t *testing.T) {
 			if c.idle >= 0 && idle != c.idle {
 				t.Errorf("period %v: TCP_KEEPIDLE is %ds, want %ds", c.period, idle, c.idle)
 			}
-			if userTimeout != int(tcpUserTimeout.Milliseconds()) {
+			if userTimeout != int(internet.LongLivedUserTimeout.Milliseconds()) {
 				t.Errorf("period %v: TCP_USER_TIMEOUT is %dms", c.period, userTimeout)
 			}
 		})
