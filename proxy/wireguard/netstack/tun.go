@@ -143,6 +143,9 @@ func (tun *netTun) Read(buf [][]byte, sizes []int, offset int) (int, error) {
 	}
 
 	n, err := view.Read(buf[0][offset:])
+	// Handed back to the pool rather than left to the garbage collector,
+	// which would otherwise clear up after every packet the stack sends.
+	view.Release()
 	if err != nil {
 		return 0, err
 	}
@@ -170,8 +173,12 @@ func (tun *netTun) Write(buf [][]byte, offset int) (int, error) {
 		case 6:
 			tun.ep.InjectInbound(header.IPv6ProtocolNumber, pkb)
 		default:
+			pkb.DecRef()
 			return 0, syscall.EAFNOSUPPORT
 		}
+		// The stack takes references of its own for whatever it keeps, so
+		// the one taken here is released once the packet is delivered.
+		pkb.DecRef()
 	}
 	return len(buf), nil
 }
