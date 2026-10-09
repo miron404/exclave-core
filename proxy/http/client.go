@@ -42,11 +42,18 @@ type Client struct {
 	serverPicker       protocol.ServerPicker
 	policyManager      policy.Manager
 	h1SkipWaitForReply bool
-	transport          *http2.Transport
-	cachedH2Mutex      sync.Mutex
-	cachedH2Conns      map[net.Destination]*list.List
-	connectUDP         bool
-	uriTemplate        *uritemplate.Template
+	// transport serves connections to the proxy that have no socket of their
+	// own here, through another outbound, and pings them after 15 seconds of
+	// silence since nothing else would notice them die. socketTransport
+	// serves the rest, whose socket is tuned to find a dead path itself, and
+	// pings only as rarely as the TCP keepalive probes, so that an idle
+	// tunnel does not wake the radio four times a minute.
+	transport       *http2.Transport
+	socketTransport *http2.Transport
+	cachedH2Mutex   sync.Mutex
+	cachedH2Conns   map[net.Destination]*list.List
+	connectUDP      bool
+	uriTemplate     *uritemplate.Template
 }
 
 func (c *Client) InterfaceUpdate() {
@@ -86,6 +93,9 @@ func NewClient(ctx context.Context, config *ClientConfig) (*Client, error) {
 		h1SkipWaitForReply: config.H1SkipWaitForReply,
 		transport: &http2.Transport{
 			ReadIdleTimeout: time.Second * 15,
+		},
+		socketTransport: &http2.Transport{
+			ReadIdleTimeout: internet.LongLivedKeepalive,
 		},
 		cachedH2Conns: make(map[net.Destination]*list.List),
 		connectUDP:    config.ConnectUdp,
@@ -152,8 +162,16 @@ func (c *Client) Process(ctx context.Context, link *transport.Link, dialer inter
 			}
 		}
 	}
+	// What was read past the response headers. Over TCP it is the start of
+	// the stream; over UDP it is the start of the capsule stream, which has to
+	// be parsed, not handed on as a datagram.
+	var leftover []byte
 	if firstResp != nil {
-		if err := link.Writer.WriteMultiBuffer(firstResp); err != nil {
+		if target.Network == net.Network_UDP {
+			leftover = make([]byte, firstResp.Len())
+			firstResp, _ = buf.SplitBytes(firstResp, leftover)
+			buf.ReleaseMulti(firstResp)
+		} else if err := link.Writer.WriteMultiBuffer(firstResp); err != nil {
 			return err
 		}
 	}
@@ -173,12 +191,12 @@ func (c *Client) Process(ctx context.Context, link *transport.Link, dialer inter
 		if target.Network == net.Network_UDP {
 			return buf.Copy(link.Reader, newUoTWriter(conn, target), buf.UpdateActivity(timer))
 		}
-		return buf.Copy(link.Reader, buf.NewWriter(conn), buf.UpdateActivity(timer))
+		return buf.Copy(link.Reader, newCoalescingWriter(conn), buf.UpdateActivity(timer))
 	}
 	responseFunc := func() error {
 		defer timer.SetTimeout(p.Timeouts.UplinkOnly)
 		if target.Network == net.Network_UDP {
-			return buf.Copy(newUoTReader(conn), link.Writer, buf.UpdateActivity(timer))
+			return buf.Copy(newUoTReader(conn, leftover), link.Writer, buf.UpdateActivity(timer))
 		}
 		return buf.Copy(buf.NewReader(conn), link.Writer, buf.UpdateActivity(timer))
 	}
@@ -344,8 +362,8 @@ func (c *Client) setupHTTPTunnel(ctx context.Context, dest net.Destination, targ
 			req.Header.Set("capsule-protocol", "?1")
 		}
 
-		pr, pw := io.Pipe()
-		req.Body = pr
+		body := newStreamBody()
+		req.Body = body
 
 		var pErr error
 		var wg sync.WaitGroup
@@ -353,7 +371,7 @@ func (c *Client) setupHTTPTunnel(ctx context.Context, dest net.Destination, targ
 
 		go func() {
 			if target.Network == net.Network_TCP {
-				_, pErr = pw.Write(firstPayload)
+				_, pErr = body.Write(firstPayload)
 			}
 			wg.Done()
 		}()
@@ -400,7 +418,7 @@ func (c *Client) setupHTTPTunnel(ctx context.Context, dest net.Destination, targ
 			resp.Body.Close()
 			return nil, newError("Proxy responded with non 200 code: " + resp.Status)
 		}
-		return newHTTP2Conn(pw, resp.Body), nil
+		return newHTTP2Conn(body, resp.Body), nil
 	}
 
 	c.cachedH2Mutex.Lock()
@@ -431,6 +449,13 @@ func (c *Client) setupHTTPTunnel(ctx context.Context, dest net.Destination, targ
 	if err != nil {
 		return nil, nil, err
 	}
+	// Left to the dialer, the socket probes every 15 seconds of idling, and a
+	// path that dies with data in flight is only given up after the kernel's
+	// retransmissions run out, a quarter of an hour later.
+	hasSocket, err := internet.TuneLongLivedTCP(rawConn, internet.LongLivedKeepalive, internet.LongLivedUserTimeout)
+	if err != nil {
+		newError("failed to tune the connection to the proxy").Base(err).AtDebug().WriteToLog(session.ExportIDToError(ctx))
+	}
 
 	iConn := rawConn
 	if statConn, ok := iConn.(*internet.StatCouterConnection); ok {
@@ -455,7 +480,11 @@ func (c *Client) setupHTTPTunnel(ctx context.Context, dest net.Destination, targ
 		}
 		return conn, mb, nil
 	case "h2":
-		h2clientConn, err := c.transport.NewClientConn(rawConn)
+		transport := c.transport
+		if hasSocket {
+			transport = c.socketTransport
+		}
+		h2clientConn, err := transport.NewClientConn(rawConn)
 		if err != nil {
 			rawConn.Close()
 			return nil, nil, err
@@ -480,12 +509,12 @@ func (c *Client) setupHTTPTunnel(ctx context.Context, dest net.Destination, targ
 	}
 }
 
-func newHTTP2Conn(pipedReqBody *io.PipeWriter, respBody io.ReadCloser) net.Conn {
-	return &http2Conn{in: pipedReqBody, out: respBody}
+func newHTTP2Conn(reqBody *streamBody, respBody io.ReadCloser) net.Conn {
+	return &http2Conn{in: reqBody, out: respBody}
 }
 
 type http2Conn struct {
-	in  *io.PipeWriter
+	in  *streamBody
 	out io.ReadCloser
 }
 
@@ -524,7 +553,7 @@ func (c *http2Conn) SetWriteDeadline(t time.Time) error {
 }
 
 func (h *http2Conn) Close() error {
-	h.in.Close()
+	_ = h.in.CloseWrite()
 	return h.out.Close()
 }
 

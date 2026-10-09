@@ -3,7 +3,9 @@ name: MASQUE
 # The upstream test workflow only runs on main, so nothing tests the MASQUE
 # branch otherwise. This covers the packages it adds or changes, the loopback
 # fix included, under the race detector, since most of what can go wrong there
-# is two pumps and a teardown racing each other.
+# is two pumps and a teardown racing each other. The HTTP proxy client and the
+# socket tuning are covered too, since a tunnel through an HTTPS proxy runs on
+# them.
 #
 # The tags are the ones the app builds with. Since Go 1.27, golang.org/x/net's
 # HTTP/2 client is a wrapper around net/http's own unless http2legacy is set,
@@ -18,6 +20,8 @@ on:
       - "proxy/masque/**"
       - "proxy/wireguard/netstack/**"
       - "proxy/loopback/**"
+      - "proxy/http/**"
+      - "transport/internet/longlived*.go"
       - "infra/conf/v4/masque.go"
       - "go.mod"
       - "go.sum"
@@ -41,10 +45,10 @@ jobs:
           cache-dependency-path: ./go.sum
 
       - name: Vet
-        run: go vet ./proxy/masque/... ./proxy/wireguard/netstack/... ./proxy/loopback/...
+        run: go vet ./proxy/masque/... ./proxy/wireguard/netstack/... ./proxy/loopback/... ./proxy/http/... ./transport/internet/
 
       - name: Run tests
-        run: go test -race -count=1 ./proxy/masque/... ./proxy/wireguard/netstack/... ./proxy/loopback/... ./infra/conf/v4/...
+        run: go test -race -count=1 ./proxy/masque/... ./proxy/wireguard/netstack/... ./proxy/loopback/... ./proxy/http/... ./transport/internet/ ./infra/conf/v4/...
 
       - name: Build for Android
         env:
