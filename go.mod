@@ -20,7 +20,7 @@ require (
 	github.com/google/go-cmp v0.7.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/miekg/dns v1.1.73
-	github.com/miron404/connect-ip-go v0.0.0-20260828231553-a6b34803dbe5
+	github.com/miron404/connect-ip-go v0.0.0-20261009183341-d2723e239004
 	github.com/pires/go-proxyproto v0.15.0
 	github.com/quic-go/quic-go v0.63.0
 	github.com/refraction-networking/utls v1.8.3-0.20260924070827-6af385813fd8
