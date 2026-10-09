@@ -1,0 +1,46 @@
+name: MASQUE probe
+
+# Asks a real WARP endpoint what it negotiates, chiefly its idle timeout, which
+# decides how often an idle tunnel pings and so wakes a phone's radio. This
+# cannot be checked from a sandbox without outbound UDP, nor from a phone
+# without a build, so it runs here against a throwaway device registered with
+# usque for the run. The results are posted as annotations on the run.
+
+on:
+  push:
+    branches:
+      - masque
+    paths:
+      - "proxy/masque/probe_test.go"
+      - ".github/workflows/masque-probe.yml"
+  workflow_dispatch:
+    inputs:
+      idle:
+        description: "Seconds to hold a session open with keepalives off"
+        default: "600"
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout codebase
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ~1.27
+          cache-dependency-path: ./go.sum
+
+      - name: Register a throwaway device
+        run: |
+          git clone --quiet --depth 1 --branch v4.2.1 https://github.com/Diniboy1123/usque "$RUNNER_TEMP/usque"
+          (cd "$RUNNER_TEMP/usque" && go build -o "$RUNNER_TEMP/usque-bin" .)
+          "$RUNNER_TEMP/usque-bin" register --accept-tos --name probe --config "$RUNNER_TEMP/warp.json" > /dev/null
+
+      - name: Probe the endpoint
+        env:
+          MASQUE_PROBE_CONFIG: ${{ runner.temp }}/warp.json
+          MASQUE_PROBE_IDLE: ${{ github.event.inputs.idle || '600' }}
+        run: go test -count=1 -timeout 25m -run TestProbeEndpoint -v ./proxy/masque/
