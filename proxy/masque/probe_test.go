@@ -1,15 +1,19 @@
 package masque
 
 import (
+	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	gonet "net"
 	"net/http"
 	"net/netip"
 	"os"
 	"strconv"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -21,6 +25,7 @@ import (
 	"github.com/yosida95/uritemplate/v3"
 
 	"github.com/exclavenetwork/exclave-core/v5/common/net"
+	"github.com/exclavenetwork/exclave-core/v5/transport/internet"
 )
 
 // TestProbeEndpoint asks a real WARP endpoint what it negotiates, which decides
@@ -173,3 +178,145 @@ func (r *parametersRecorder) RecordEvent(event qlogwriter.Event) {
 		r.once.Do(func() { r.received <- params })
 	}
 }
+
+// TestProbeThroughput moves data through a real tunnel, in each mode, and
+// reports the speed and the CPU this process spent per gigabyte, which is the
+// cost a phone pays in battery for the same traffic. The far end is
+// speed.cloudflare.com, reached inside the tunnel over TLS like any app would.
+// Needs MASQUE_PROBE_CONFIG as above; MASQUE_PROBE_SPEED is the megabytes
+// moved each way.
+func TestProbeThroughput(t *testing.T) {
+	path := os.Getenv("MASQUE_PROBE_CONFIG")
+	megabytes, _ := strconv.Atoi(os.Getenv("MASQUE_PROBE_SPEED"))
+	if path == "" || megabytes <= 0 {
+		t.Skip("set MASQUE_PROBE_CONFIG and MASQUE_PROBE_SPEED")
+	}
+	size := int64(megabytes) << 20
+	label := os.Getenv("MASQUE_PROBE_LABEL")
+	addresses, err := gonet.DefaultResolver.LookupNetIP(context.Background(), "ip4", speedHost)
+	if err != nil || len(addresses) == 0 {
+		t.Fatal("cannot resolve ", speedHost, ": ", err)
+	}
+	target := netip.AddrPortFrom(addresses[0], 443)
+
+	for _, mode := range []string{"quic", "h2"} {
+		o := probeOutbound(t, path)
+		var dialer internet.Dialer = probeDialer{}
+		if mode == "h2" {
+			o.useHTTP2 = true
+			o.http2Address = net.ParseAddress(probeH2Address(t, path))
+		}
+		tun, err := newTunnel(context.Background(), o, dialer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// One small request first, so the session is up before measuring.
+		if err := speedTransfer(tun, target, "GET", 1<<10); err != nil {
+			t.Fatal(mode, ": ", err)
+		}
+		for _, method := range []string{"GET", "POST"} {
+			for range 2 {
+				var before, after syscall.Rusage
+				_ = syscall.Getrusage(syscall.RUSAGE_SELF, &before)
+				start := time.Now()
+				if err := speedTransfer(tun, target, method, size); err != nil {
+					t.Fatal(mode, " ", method, ": ", err)
+				}
+				elapsed := time.Since(start)
+				_ = syscall.Getrusage(syscall.RUSAGE_SELF, &after)
+				cpu := time.Duration(after.Utime.Nano() - before.Utime.Nano() + after.Stime.Nano() - before.Stime.Nano())
+				direction := map[string]string{"GET": "download", "POST": "upload"}[method]
+				probeReport(fmt.Sprintf("%s %s %s", label, mode, direction),
+					"%.0f Mbit/s, %.1f s of CPU per GB", float64(size)*8/elapsed.Seconds()/1e6,
+					cpu.Seconds()/(float64(size)/1e9))
+			}
+		}
+		_ = tun.Close()
+	}
+}
+
+const speedHost = "speed.cloudflare.com"
+
+// speedTransfer downloads or uploads size bytes over HTTPS inside the tunnel.
+func speedTransfer(tun *tunnel, target netip.AddrPort, method string, size int64) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	conn, err := tun.DialContextTCPAddrPort(ctx, target)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(2 * time.Minute))
+	tlsConn := tls.Client(conn, &tls.Config{ServerName: speedHost})
+	var request *http.Request
+	if method == "GET" {
+		request, _ = http.NewRequest("GET", fmt.Sprintf("https://%s/__down?bytes=%d", speedHost, size), nil)
+	} else {
+		request, _ = http.NewRequest("POST", "https://"+speedHost+"/__up", io.LimitReader(zeroReader{}, size))
+		request.ContentLength = size
+	}
+	request.Close = true
+	if err := request.Write(tlsConn); err != nil {
+		return err
+	}
+	response, err := http.ReadResponse(bufio.NewReaderSize(tlsConn, 64<<10), request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	n, err := io.Copy(io.Discard, response.Body)
+	if err != nil {
+		return err
+	}
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s answered %s", speedHost, response.Status)
+	}
+	if method == "GET" && n != size {
+		return fmt.Errorf("downloaded %d bytes of %d", n, size)
+	}
+	return nil
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	clear(p)
+	return len(p), nil
+}
+
+func probeH2Address(t *testing.T, path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		EndpointH2V4 string `json:"endpoint_h2_v4"`
+	}
+	_ = json.Unmarshal(data, &config)
+	if config.EndpointH2V4 == "" {
+		return "162.159.198.2"
+	}
+	return config.EndpointH2V4
+}
+
+// probeDialer dials the way the core does on a device: a UDP socket of its
+// own for QUIC, so path MTU discovery works, and a plain TCP connection for
+// HTTP/2.
+type probeDialer struct{}
+
+func (probeDialer) Dial(ctx context.Context, destination net.Destination) (internet.Connection, error) {
+	if destination.Network == net.Network_UDP {
+		socket, err := gonet.ListenUDP("udp", nil)
+		if err != nil {
+			return nil, err
+		}
+		return &internet.PacketConnWrapper{Conn: socket, Dest: &gonet.UDPAddr{
+			IP:   destination.Address.IP(),
+			Port: int(destination.Port),
+		}}, nil
+	}
+	var d gonet.Dialer
+	return d.DialContext(ctx, "tcp", destination.NetAddr())
+}
+
+func (probeDialer) Address() net.Address { return nil }

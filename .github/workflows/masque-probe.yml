@@ -4,7 +4,9 @@ name: MASQUE probe
 # decides how often an idle tunnel pings and so wakes a phone's radio. This
 # cannot be checked from a sandbox without outbound UDP, nor from a phone
 # without a build, so it runs here against a throwaway device registered with
-# usque for the run. The results are posted as annotations on the run.
+# usque for the run. It also measures speed and CPU per gigabyte through the
+# tunnel in each mode, and can compare against another connect-ip-go
+# revision in the same job. The results are posted as annotations on the run.
 
 on:
   push:
@@ -18,6 +20,12 @@ on:
       idle:
         description: "Seconds to hold a session open with keepalives off"
         default: "600"
+      speed:
+        description: "Megabytes moved each way per transfer (under 100), 0 to skip"
+        default: "90"
+      compare_connect_ip:
+        description: "connect-ip-go revision to measure as well"
+        default: ""
 
 jobs:
   probe:
@@ -44,3 +52,21 @@ jobs:
           MASQUE_PROBE_CONFIG: ${{ runner.temp }}/warp.json
           MASQUE_PROBE_IDLE: ${{ github.event.inputs.idle || '600' }}
         run: go test -count=1 -timeout 25m -run TestProbeEndpoint -v ./proxy/masque/
+
+      - name: Measure throughput
+        if: ${{ github.event.inputs.speed != '0' }}
+        env:
+          MASQUE_PROBE_CONFIG: ${{ runner.temp }}/warp.json
+          MASQUE_PROBE_SPEED: ${{ github.event.inputs.speed || '90' }}
+          MASQUE_PROBE_LABEL: pinned
+        run: go test -count=1 -timeout 20m -run TestProbeThroughput -v ./proxy/masque/
+
+      - name: Measure throughput with another connect-ip-go
+        if: ${{ github.event.inputs.compare_connect_ip != '' && github.event.inputs.speed != '0' }}
+        env:
+          MASQUE_PROBE_CONFIG: ${{ runner.temp }}/warp.json
+          MASQUE_PROBE_SPEED: ${{ github.event.inputs.speed || '90' }}
+          MASQUE_PROBE_LABEL: ${{ github.event.inputs.compare_connect_ip }}
+        run: |
+          go get github.com/miron404/connect-ip-go@${{ github.event.inputs.compare_connect_ip }}
+          go test -count=1 -timeout 20m -run TestProbeThroughput -v ./proxy/masque/
