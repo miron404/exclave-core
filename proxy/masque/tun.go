@@ -155,8 +155,11 @@ func (tun *netTun) Write(buf [][]byte, offset int) (int, error) {
 		case 6:
 			tun.ep.InjectInbound(header.IPv6ProtocolNumber, pkb)
 		default:
+			pkb.DecRef()
 			return 0, syscall.EAFNOSUPPORT
 		}
+		// The stack takes its own reference to what it keeps.
+		pkb.DecRef()
 	}
 	return len(buf), nil
 }
