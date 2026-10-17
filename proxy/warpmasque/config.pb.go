@@ -2,9 +2,9 @@
 // versions:
 // 	protoc-gen-go v1.36.12
 // 	protoc        v5.29.3
-// source: proxy/masque/config.proto
+// source: proxy/warpmasque/config.proto
 
-package masque
+package warpmasque
 
 import (
 	net "github.com/exclavenetwork/exclave-core/v5/common/net"
@@ -62,11 +62,11 @@ func (x ClientConfig_DomainStrategy) String() string {
 }
 
 func (ClientConfig_DomainStrategy) Descriptor() protoreflect.EnumDescriptor {
-	return file_proxy_masque_config_proto_enumTypes[0].Descriptor()
+	return file_proxy_warpmasque_config_proto_enumTypes[0].Descriptor()
 }
 
 func (ClientConfig_DomainStrategy) Type() protoreflect.EnumType {
-	return &file_proxy_masque_config_proto_enumTypes[0]
+	return &file_proxy_warpmasque_config_proto_enumTypes[0]
 }
 
 func (x ClientConfig_DomainStrategy) Number() protoreflect.EnumNumber {
@@ -75,7 +75,7 @@ func (x ClientConfig_DomainStrategy) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ClientConfig_DomainStrategy.Descriptor instead.
 func (ClientConfig_DomainStrategy) EnumDescriptor() ([]byte, []int) {
-	return file_proxy_masque_config_proto_rawDescGZIP(), []int{0, 0}
+	return file_proxy_warpmasque_config_proto_rawDescGZIP(), []int{0, 0}
 }
 
 type ClientConfig struct {
@@ -109,14 +109,14 @@ type ClientConfig struct {
 	// sit idle before the kernel probes it. 0 selects the default, a negative
 	// value turns the probes off.
 	TcpKeepalivePeriod int32                       `protobuf:"varint,15,opt,name=tcp_keepalive_period,json=tcpKeepalivePeriod,proto3" json:"tcp_keepalive_period,omitempty"`
-	DomainStrategy     ClientConfig_DomainStrategy `protobuf:"varint,13,opt,name=domain_strategy,json=domainStrategy,proto3,enum=exclave.core.proxy.masque.ClientConfig_DomainStrategy" json:"domain_strategy,omitempty"`
+	DomainStrategy     ClientConfig_DomainStrategy `protobuf:"varint,13,opt,name=domain_strategy,json=domainStrategy,proto3,enum=exclave.core.proxy.warpmasque.ClientConfig_DomainStrategy" json:"domain_strategy,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ClientConfig) Reset() {
 	*x = ClientConfig{}
-	mi := &file_proxy_masque_config_proto_msgTypes[0]
+	mi := &file_proxy_warpmasque_config_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -128,7 +128,7 @@ func (x *ClientConfig) String() string {
 func (*ClientConfig) ProtoMessage() {}
 
 func (x *ClientConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_masque_config_proto_msgTypes[0]
+	mi := &file_proxy_warpmasque_config_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -141,7 +141,7 @@ func (x *ClientConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClientConfig.ProtoReflect.Descriptor instead.
 func (*ClientConfig) Descriptor() ([]byte, []int) {
-	return file_proxy_masque_config_proto_rawDescGZIP(), []int{0}
+	return file_proxy_warpmasque_config_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *ClientConfig) GetAddress() *net.IPOrDomain {
@@ -249,11 +249,11 @@ func (x *ClientConfig) GetDomainStrategy() ClientConfig_DomainStrategy {
 	return ClientConfig_USE_IP
 }
 
-var File_proxy_masque_config_proto protoreflect.FileDescriptor
+var File_proxy_warpmasque_config_proto protoreflect.FileDescriptor
 
-const file_proxy_masque_config_proto_rawDesc = "" +
+const file_proxy_warpmasque_config_proto_rawDesc = "" +
 	"\n" +
-	"\x19proxy/masque/config.proto\x12\x19exclave.core.proxy.masque\x1a common/protoext/extensions.proto\x1a\x18common/net/address.proto\"\xa2\x06\n" +
+	"\x1dproxy/warpmasque/config.proto\x12\x1dexclave.core.proxy.warpmasque\x1a common/protoext/extensions.proto\x1a\x18common/net/address.proto\"\xab\x06\n" +
 	"\fClientConfig\x12=\n" +
 	"\aaddress\x18\x01 \x01(\v2#.exclave.core.common.net.IPOrDomainR\aaddress\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\rR\x04port\x12H\n" +
@@ -271,8 +271,8 @@ const file_proxy_masque_config_proto_rawDesc = "" +
 	"\x10keepalive_period\x18\v \x01(\rR\x0fkeepalivePeriod\x12.\n" +
 	"\x13initial_packet_size\x18\f \x01(\rR\x11initialPacketSize\x12*\n" +
 	"\x11http2_ping_period\x18\x0e \x01(\rR\x0fhttp2PingPeriod\x120\n" +
-	"\x14tcp_keepalive_period\x18\x0f \x01(\x05R\x12tcpKeepalivePeriod\x12_\n" +
-	"\x0fdomain_strategy\x18\r \x01(\x0e26.exclave.core.proxy.masque.ClientConfig.DomainStrategyR\x0edomainStrategy\"V\n" +
+	"\x14tcp_keepalive_period\x18\x0f \x01(\x05R\x12tcpKeepalivePeriod\x12c\n" +
+	"\x0fdomain_strategy\x18\r \x01(\x0e2:.exclave.core.proxy.warpmasque.ClientConfig.DomainStrategyR\x0edomainStrategy\"V\n" +
 	"\x0eDomainStrategy\x12\n" +
 	"\n" +
 	"\x06USE_IP\x10\x00\x12\v\n" +
@@ -281,33 +281,33 @@ const file_proxy_masque_config_proto_rawDesc = "" +
 	"\n" +
 	"PREFER_IP4\x10\x03\x12\x0e\n" +
 	"\n" +
-	"PREFER_IP6\x10\x04:\x16\x82\xb5\x18\x12\n" +
-	"\boutbound\x12\x06masqueB\x8b\x01\n" +
-	"3com.github.exclavenetwork.exclave.core.proxy.masqueP\x01Z6github.com/exclavenetwork/exclave-core/v5/proxy/masque\xaa\x02\x19Exclave.Core.Proxy.Masqueb\x06proto3"
+	"PREFER_IP6\x10\x04:\x1b\x82\xb5\x18\x17\n" +
+	"\boutbound\x12\vwarp-masqueB\x97\x01\n" +
+	"7com.github.exclavenetwork.exclave.core.proxy.warpmasqueP\x01Z:github.com/exclavenetwork/exclave-core/v5/proxy/warpmasque\xaa\x02\x1dExclave.Core.Proxy.WarpMasqueb\x06proto3"
 
 var (
-	file_proxy_masque_config_proto_rawDescOnce sync.Once
-	file_proxy_masque_config_proto_rawDescData []byte
+	file_proxy_warpmasque_config_proto_rawDescOnce sync.Once
+	file_proxy_warpmasque_config_proto_rawDescData []byte
 )
 
-func file_proxy_masque_config_proto_rawDescGZIP() []byte {
-	file_proxy_masque_config_proto_rawDescOnce.Do(func() {
-		file_proxy_masque_config_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_proxy_masque_config_proto_rawDesc), len(file_proxy_masque_config_proto_rawDesc)))
+func file_proxy_warpmasque_config_proto_rawDescGZIP() []byte {
+	file_proxy_warpmasque_config_proto_rawDescOnce.Do(func() {
+		file_proxy_warpmasque_config_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_proxy_warpmasque_config_proto_rawDesc), len(file_proxy_warpmasque_config_proto_rawDesc)))
 	})
-	return file_proxy_masque_config_proto_rawDescData
+	return file_proxy_warpmasque_config_proto_rawDescData
 }
 
-var file_proxy_masque_config_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_proxy_masque_config_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
-var file_proxy_masque_config_proto_goTypes = []any{
-	(ClientConfig_DomainStrategy)(0), // 0: exclave.core.proxy.masque.ClientConfig.DomainStrategy
-	(*ClientConfig)(nil),             // 1: exclave.core.proxy.masque.ClientConfig
+var file_proxy_warpmasque_config_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_proxy_warpmasque_config_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
+var file_proxy_warpmasque_config_proto_goTypes = []any{
+	(ClientConfig_DomainStrategy)(0), // 0: exclave.core.proxy.warpmasque.ClientConfig.DomainStrategy
+	(*ClientConfig)(nil),             // 1: exclave.core.proxy.warpmasque.ClientConfig
 	(*net.IPOrDomain)(nil),           // 2: exclave.core.common.net.IPOrDomain
 }
-var file_proxy_masque_config_proto_depIdxs = []int32{
-	2, // 0: exclave.core.proxy.masque.ClientConfig.address:type_name -> exclave.core.common.net.IPOrDomain
-	2, // 1: exclave.core.proxy.masque.ClientConfig.http2_address:type_name -> exclave.core.common.net.IPOrDomain
-	0, // 2: exclave.core.proxy.masque.ClientConfig.domain_strategy:type_name -> exclave.core.proxy.masque.ClientConfig.DomainStrategy
+var file_proxy_warpmasque_config_proto_depIdxs = []int32{
+	2, // 0: exclave.core.proxy.warpmasque.ClientConfig.address:type_name -> exclave.core.common.net.IPOrDomain
+	2, // 1: exclave.core.proxy.warpmasque.ClientConfig.http2_address:type_name -> exclave.core.common.net.IPOrDomain
+	0, // 2: exclave.core.proxy.warpmasque.ClientConfig.domain_strategy:type_name -> exclave.core.proxy.warpmasque.ClientConfig.DomainStrategy
 	3, // [3:3] is the sub-list for method output_type
 	3, // [3:3] is the sub-list for method input_type
 	3, // [3:3] is the sub-list for extension type_name
@@ -315,27 +315,27 @@ var file_proxy_masque_config_proto_depIdxs = []int32{
 	0, // [0:3] is the sub-list for field type_name
 }
 
-func init() { file_proxy_masque_config_proto_init() }
-func file_proxy_masque_config_proto_init() {
-	if File_proxy_masque_config_proto != nil {
+func init() { file_proxy_warpmasque_config_proto_init() }
+func file_proxy_warpmasque_config_proto_init() {
+	if File_proxy_warpmasque_config_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proxy_masque_config_proto_rawDesc), len(file_proxy_masque_config_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proxy_warpmasque_config_proto_rawDesc), len(file_proxy_warpmasque_config_proto_rawDesc)),
 			NumEnums:      1,
 			NumMessages:   1,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_proxy_masque_config_proto_goTypes,
-		DependencyIndexes: file_proxy_masque_config_proto_depIdxs,
-		EnumInfos:         file_proxy_masque_config_proto_enumTypes,
-		MessageInfos:      file_proxy_masque_config_proto_msgTypes,
+		GoTypes:           file_proxy_warpmasque_config_proto_goTypes,
+		DependencyIndexes: file_proxy_warpmasque_config_proto_depIdxs,
+		EnumInfos:         file_proxy_warpmasque_config_proto_enumTypes,
+		MessageInfos:      file_proxy_warpmasque_config_proto_msgTypes,
 	}.Build()
-	File_proxy_masque_config_proto = out.File
-	file_proxy_masque_config_proto_goTypes = nil
-	file_proxy_masque_config_proto_depIdxs = nil
+	File_proxy_warpmasque_config_proto = out.File
+	file_proxy_warpmasque_config_proto_goTypes = nil
+	file_proxy_warpmasque_config_proto_depIdxs = nil
 }

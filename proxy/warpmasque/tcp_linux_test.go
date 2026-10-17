@@ -1,6 +1,6 @@
 //go:build linux
 
-package masque
+package warpmasque
 
 import (
 	gonet "net"

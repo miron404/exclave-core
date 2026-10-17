@@ -1,4 +1,4 @@
-package masque
+package warpmasque
 
 import "github.com/exclavenetwork/exclave-core/v5/common/errors"
 

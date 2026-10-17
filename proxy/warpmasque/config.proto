@@ -1,9 +1,9 @@
 syntax = "proto3";
 
-package exclave.core.proxy.masque;
-option csharp_namespace = "Exclave.Core.Proxy.Masque";
-option go_package = "github.com/exclavenetwork/exclave-core/v5/proxy/masque";
-option java_package = "com.github.exclavenetwork.exclave.core.proxy.masque";
+package exclave.core.proxy.warpmasque;
+option csharp_namespace = "Exclave.Core.Proxy.WarpMasque";
+option go_package = "github.com/exclavenetwork/exclave-core/v5/proxy/warpmasque";
+option java_package = "com.github.exclavenetwork.exclave.core.proxy.warpmasque";
 option java_multiple_files = true;
 
 import "common/protoext/extensions.proto";
@@ -11,7 +11,7 @@ import "common/net/address.proto";
 
 message ClientConfig {
   option (exclave.core.common.protoext.message_opt).type = "outbound";
-  option (exclave.core.common.protoext.message_opt).short_name = "masque";
+  option (exclave.core.common.protoext.message_opt).short_name = "warp-masque";
 
   enum DomainStrategy {
     USE_IP = 0;

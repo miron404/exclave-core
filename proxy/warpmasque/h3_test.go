@@ -1,4 +1,4 @@
-package masque
+package warpmasque
 
 import (
 	"context"
@@ -91,7 +91,7 @@ func TestSettingsArriveOverSelfDialedTransport(t *testing.T) {
 	}
 	defer clientConn.Close()
 
-	// Exactly the construction proxy/masque uses.
+	// Exactly the construction proxy/warpmasque uses.
 	transport := &quic.Transport{Conn: &nonSyscallPacketConn{clientConn}, ConnectionIDLength: 20}
 	defer transport.Close()
 

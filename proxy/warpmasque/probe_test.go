@@ -1,6 +1,6 @@
 //go:build unix
 
-package masque
+package warpmasque
 
 import (
 	"bufio"

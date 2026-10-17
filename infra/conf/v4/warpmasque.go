@@ -6,10 +6,10 @@ import (
 	"github.com/golang/protobuf/proto"
 
 	"github.com/exclavenetwork/exclave-core/v5/infra/conf/cfgcommon"
-	"github.com/exclavenetwork/exclave-core/v5/proxy/masque"
+	"github.com/exclavenetwork/exclave-core/v5/proxy/warpmasque"
 )
 
-type MasqueClientConfig struct {
+type WarpMasqueClientConfig struct {
 	Address           *cfgcommon.Address `json:"address"`
 	Port              uint16             `json:"port"`
 	HTTP2Address      *cfgcommon.Address `json:"http2Address"`
@@ -27,7 +27,7 @@ type MasqueClientConfig struct {
 	DomainStrategy    string             `json:"domainStrategy"`
 }
 
-func (c *MasqueClientConfig) Build() (proto.Message, error) {
+func (c *WarpMasqueClientConfig) Build() (proto.Message, error) {
 	if c.Address == nil {
 		return nil, newError("missing server address")
 	}
@@ -43,7 +43,7 @@ func (c *MasqueClientConfig) Build() (proto.Message, error) {
 	if c.InitialPacketSize > 65535 {
 		return nil, newError("invalid initial packet size: ", c.InitialPacketSize)
 	}
-	config := &masque.ClientConfig{
+	config := &warpmasque.ClientConfig{
 		Address:            c.Address.Build(),
 		Port:               uint32(c.Port),
 		PrivateKey:         c.PrivateKey,
@@ -63,15 +63,15 @@ func (c *MasqueClientConfig) Build() (proto.Message, error) {
 	}
 	switch strings.ToLower(c.DomainStrategy) {
 	case "useip", "":
-		config.DomainStrategy = masque.ClientConfig_USE_IP
+		config.DomainStrategy = warpmasque.ClientConfig_USE_IP
 	case "useipv4":
-		config.DomainStrategy = masque.ClientConfig_USE_IP4
+		config.DomainStrategy = warpmasque.ClientConfig_USE_IP4
 	case "useipv6":
-		config.DomainStrategy = masque.ClientConfig_USE_IP6
+		config.DomainStrategy = warpmasque.ClientConfig_USE_IP6
 	case "preferipv4":
-		config.DomainStrategy = masque.ClientConfig_PREFER_IP4
+		config.DomainStrategy = warpmasque.ClientConfig_PREFER_IP4
 	case "preferipv6":
-		config.DomainStrategy = masque.ClientConfig_PREFER_IP6
+		config.DomainStrategy = warpmasque.ClientConfig_PREFER_IP6
 	default:
 		return nil, newError("unsupported domain strategy: ", c.DomainStrategy)
 	}

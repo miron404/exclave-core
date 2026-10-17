@@ -1,4 +1,4 @@
-// Package masque implements a MASQUE (CONNECT-IP, RFC 9484) outbound, as
+// Package warpmasque implements a MASQUE (CONNECT-IP, RFC 9484) outbound, as
 // deployed by Cloudflare WARP.
 //
 // The tunnel setup follows https://github.com/Diniboy1123/usque (MIT), which
@@ -6,7 +6,7 @@
 // short lived self signed certificate carrying the enrolled device key, the
 // endpoint certificate is pinned by public key rather than by name, and the
 // CONNECT-IP request is sent with the `cf-connect-ip` protocol.
-package masque
+package warpmasque
 
 import (
 	"context"

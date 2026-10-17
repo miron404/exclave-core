@@ -13,7 +13,7 @@ on:
     branches:
       - masque
     paths:
-      - "proxy/masque/probe_test.go"
+      - "proxy/warpmasque/probe_test.go"
       - ".github/workflows/masque-probe.yml"
   workflow_dispatch:
     inputs:
@@ -51,7 +51,7 @@ jobs:
         env:
           MASQUE_PROBE_CONFIG: ${{ runner.temp }}/warp.json
           MASQUE_PROBE_IDLE: ${{ github.event.inputs.idle || '600' }}
-        run: go test -count=1 -timeout 25m -run TestProbeEndpoint -v ./proxy/masque/
+        run: go test -count=1 -timeout 25m -run TestProbeEndpoint -v ./proxy/warpmasque/
 
       - name: Measure throughput
         if: ${{ github.event.inputs.speed != '0' }}
@@ -59,7 +59,7 @@ jobs:
           MASQUE_PROBE_CONFIG: ${{ runner.temp }}/warp.json
           MASQUE_PROBE_SPEED: ${{ github.event.inputs.speed || '90' }}
           MASQUE_PROBE_LABEL: pinned
-        run: go test -count=1 -timeout 20m -run TestProbeThroughput -v ./proxy/masque/
+        run: go test -count=1 -timeout 20m -run TestProbeThroughput -v ./proxy/warpmasque/
 
       - name: Measure throughput with another connect-ip-go
         if: ${{ github.event.inputs.compare_connect_ip != '' && github.event.inputs.speed != '0' }}
@@ -69,4 +69,4 @@ jobs:
           MASQUE_PROBE_LABEL: ${{ github.event.inputs.compare_connect_ip }}
         run: |
           go get github.com/miron404/connect-ip-go@${{ github.event.inputs.compare_connect_ip }}
-          go test -count=1 -timeout 20m -run TestProbeThroughput -v ./proxy/masque/
+          go test -count=1 -timeout 20m -run TestProbeThroughput -v ./proxy/warpmasque/

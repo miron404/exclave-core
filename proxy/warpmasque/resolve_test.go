@@ -1,4 +1,4 @@
-package masque
+package warpmasque
 
 import (
 	"net/netip"

@@ -7,12 +7,12 @@ import (
 	"github.com/exclavenetwork/exclave-core/v5/infra/conf/cfgcommon"
 	"github.com/exclavenetwork/exclave-core/v5/infra/conf/cfgcommon/testassist"
 	v4 "github.com/exclavenetwork/exclave-core/v5/infra/conf/v4"
-	"github.com/exclavenetwork/exclave-core/v5/proxy/masque"
+	"github.com/exclavenetwork/exclave-core/v5/proxy/warpmasque"
 )
 
-func TestMasqueOutboundConfig(t *testing.T) {
+func TestWarpMasqueOutboundConfig(t *testing.T) {
 	creator := func() cfgcommon.Buildable {
-		return new(v4.MasqueClientConfig)
+		return new(v4.WarpMasqueClientConfig)
 	}
 
 	testassist.RunMultiTestCase(t, []testassist.TestCase{
@@ -33,7 +33,7 @@ func TestMasqueOutboundConfig(t *testing.T) {
 				"domainStrategy": "preferIPv4"
 			}`,
 			Parser: testassist.LoadJSON(creator),
-			Output: &masque.ClientConfig{
+			Output: &warpmasque.ClientConfig{
 				Address:            net.NewIPOrDomain(net.ParseAddress("162.159.198.1")),
 				Port:               443,
 				Http2Address:       net.NewIPOrDomain(net.ParseAddress("162.159.198.2")),
@@ -46,7 +46,7 @@ func TestMasqueOutboundConfig(t *testing.T) {
 				KeepalivePeriod:    30,
 				InitialPacketSize:  1242,
 				TcpKeepalivePeriod: -1,
-				DomainStrategy:     masque.ClientConfig_PREFER_IP4,
+				DomainStrategy:     warpmasque.ClientConfig_PREFER_IP4,
 			},
 		},
 		{
@@ -59,19 +59,19 @@ func TestMasqueOutboundConfig(t *testing.T) {
 				"localAddress": ["172.16.0.2"]
 			}`,
 			Parser: testassist.LoadJSON(creator),
-			Output: &masque.ClientConfig{
+			Output: &warpmasque.ClientConfig{
 				Address:           net.NewIPOrDomain(net.ParseAddress("162.159.198.1")),
 				Port:              443,
 				PrivateKey:        "cHJpdmF0ZQ==",
 				EndpointPublicKey: "key",
 				LocalAddress:      []string{"172.16.0.2"},
-				DomainStrategy:    masque.ClientConfig_USE_IP,
+				DomainStrategy:    warpmasque.ClientConfig_USE_IP,
 			},
 		},
 	})
 }
 
-func TestMasqueOutboundConfigRejectsIncompleteInput(t *testing.T) {
+func TestWarpMasqueOutboundConfigRejectsIncompleteInput(t *testing.T) {
 	for name, input := range map[string]string{
 		"no address":          `{"privateKey": "a", "endpointPublicKey": "b", "localAddress": ["172.16.0.2"]}`,
 		"no private key":      `{"address": "162.159.198.1", "endpointPublicKey": "b", "localAddress": ["172.16.0.2"]}`,
@@ -82,7 +82,7 @@ func TestMasqueOutboundConfigRejectsIncompleteInput(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := testassist.LoadJSON(func() cfgcommon.Buildable {
-				return new(v4.MasqueClientConfig)
+				return new(v4.WarpMasqueClientConfig)
 			})(input); err == nil {
 				t.Error("expected an error")
 			}
@@ -90,10 +90,10 @@ func TestMasqueOutboundConfigRejectsIncompleteInput(t *testing.T) {
 	}
 }
 
-func TestMasqueOutboundConfigAllowsInsecureWithoutEndpointKey(t *testing.T) {
+func TestWarpMasqueOutboundConfigAllowsInsecureWithoutEndpointKey(t *testing.T) {
 	input := `{"address": "162.159.198.1", "privateKey": "a", "localAddress": ["172.16.0.2"], "allowInsecure": true}`
 	if _, err := testassist.LoadJSON(func() cfgcommon.Buildable {
-		return new(v4.MasqueClientConfig)
+		return new(v4.WarpMasqueClientConfig)
 	})(input); err != nil {
 		t.Error(err)
 	}
