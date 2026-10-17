@@ -64,7 +64,7 @@ func (c *Client) Close() error {
 	c.cachedH2Mutex.Lock()
 	for _, cachedH2Conn := range c.cachedH2Conns {
 		for elem := cachedH2Conn.Front(); elem != nil; elem = elem.Next() {
-			_ = elem.Value.(*http2.ClientConn).Close()
+			_ = elem.Value.(*http2ClientConn).Close()
 			cachedH2Conn.Remove(elem)
 		}
 	}
@@ -168,9 +168,7 @@ func (c *Client) Process(ctx context.Context, link *transport.Link, dialer inter
 	var leftover []byte
 	if firstResp != nil {
 		if target.Network == net.Network_UDP {
-			leftover = make([]byte, firstResp.Len())
-			firstResp, _ = buf.SplitBytes(firstResp, leftover)
-			buf.ReleaseMulti(firstResp)
+			leftover = multiBufferBytes(firstResp)
 		} else if err := link.Writer.WriteMultiBuffer(firstResp); err != nil {
 			return err
 		}
@@ -186,19 +184,32 @@ func (c *Client) Process(ctx context.Context, link *transport.Link, dialer inter
 	ctx, cancel := context.WithCancel(ctx)
 	timer := signal.CancelAfterInactivity(ctx, cancel, p.Timeouts.ConnectionIdle)
 
+	var writer buf.Writer
+	var reader buf.Reader
+	if target.Network == net.Network_TCP {
+		writer = newCoalescingWriter(conn)
+		reader = buf.NewReader(conn)
+	} else {
+		readerWriter := newUoTReaderWriter(conn, target, leftover, func(dest net.Destination) (net.Conn, []byte, error) {
+			conn, firstResp, err := c.setupHTTPTunnel(ctx, server.Destination(), dest, user, dialer, nil, false)
+			if err != nil {
+				return nil, nil, err
+			}
+			newError("tunneling request to ", dest, " via ", server.Destination().NetAddr()).WriteToLog(session.ExportIDToError(ctx))
+			return conn, multiBufferBytes(firstResp), nil
+		})
+		defer readerWriter.close()
+		writer = readerWriter
+		reader = readerWriter
+	}
+
 	requestFunc := func() error {
 		defer timer.SetTimeout(p.Timeouts.DownlinkOnly)
-		if target.Network == net.Network_UDP {
-			return buf.Copy(link.Reader, newUoTWriter(conn, target), buf.UpdateActivity(timer))
-		}
-		return buf.Copy(link.Reader, newCoalescingWriter(conn), buf.UpdateActivity(timer))
+		return buf.Copy(link.Reader, writer, buf.UpdateActivity(timer))
 	}
 	responseFunc := func() error {
 		defer timer.SetTimeout(p.Timeouts.UplinkOnly)
-		if target.Network == net.Network_UDP {
-			return buf.Copy(newUoTReader(conn, leftover), link.Writer, buf.UpdateActivity(timer))
-		}
-		return buf.Copy(buf.NewReader(conn), link.Writer, buf.UpdateActivity(timer))
+		return buf.Copy(reader, link.Writer, buf.UpdateActivity(timer))
 	}
 
 	responseDonePost := task.OnSuccess(responseFunc, task.Close(link.Writer))
@@ -296,16 +307,16 @@ func (c *Client) setupHTTPTunnel(ctx context.Context, dest net.Destination, targ
 		}
 
 		if target.Network == net.Network_TCP {
-			if resp.StatusCode != http.StatusOK {
+			if resp.StatusCode < 200 || resp.StatusCode > 299 {
 				resp.Body.Close()
-				return nil, nil, newError("Proxy responded with non 200 code: " + resp.Status)
+				return nil, nil, newError("Proxy responded with non 2xx code: " + resp.Status)
 			}
 		} else {
 			if resp.StatusCode != http.StatusSwitchingProtocols {
 				resp.Body.Close()
-				return nil, nil, newError("Proxy responded with non 200 code: " + resp.Status)
+				return nil, nil, newError("Proxy responded with non 101 code: " + resp.Status)
 			}
-			if resp.Header.Get("Connection") != "Upgrade" {
+			if !strings.EqualFold(resp.Header.Get("Connection"), "Upgrade") {
 				resp.Body.Close()
 				return nil, nil, newError("invalid response \"Connection\" header")
 			}
@@ -327,7 +338,7 @@ func (c *Client) setupHTTPTunnel(ctx context.Context, dest net.Destination, targ
 		return rawConn, nil, nil
 	}
 
-	connectHTTP2 := func(h2clientConn *http2.ClientConn, elem *list.Element) (net.Conn, error) {
+	connectHTTP2 := func(h2clientConn *http2ClientConn, elem *list.Element) (net.Conn, error) {
 		if target.Network != net.Network_TCP {
 			var targetHost string
 			if target.Address.Family().IsDomain() {
@@ -376,15 +387,7 @@ func (c *Client) setupHTTPTunnel(ctx context.Context, dest net.Destination, targ
 			wg.Done()
 		}()
 
-		var (
-			resp *http.Response
-			err  error
-		)
-		if target.Network == net.Network_TCP {
-			resp, err = h2clientConn.RoundTrip(req) // nolint: bodyclose
-		} else {
-			resp, err = h2RoundTrip(h2clientConn, req) // nolint: bodyclose
-		}
+		resp, err := h2clientConn.RoundTrip(req) // nolint: bodyclose
 		if err != nil {
 			if strings.Contains(err.Error(), "extended connect not supported") {
 				return nil, newError("extended connect not supported")
@@ -414,9 +417,9 @@ func (c *Client) setupHTTPTunnel(ctx context.Context, dest net.Destination, targ
 			return nil, pErr
 		}
 
-		if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode < 200 || resp.StatusCode > 299 {
 			resp.Body.Close()
-			return nil, newError("Proxy responded with non 200 code: " + resp.Status)
+			return nil, newError("Proxy responded with non 2xx code: " + resp.Status)
 		}
 		return newHTTP2Conn(body, resp.Body), nil
 	}
@@ -429,7 +432,7 @@ func (c *Client) setupHTTPTunnel(ctx context.Context, dest net.Destination, targ
 	c.cachedH2Mutex.Unlock()
 
 	if elem != nil {
-		if h2ClientConn := elem.Value.(*http2.ClientConn); h2ClientConn.CanTakeNewRequest() {
+		if h2ClientConn := elem.Value.(*http2ClientConn); h2ClientConn.CanTakeNewRequest() {
 			proxyConn, err := connectHTTP2(h2ClientConn, elem)
 			if err != nil {
 				return nil, nil, err
@@ -490,7 +493,9 @@ func (c *Client) setupHTTPTunnel(ctx context.Context, dest net.Destination, targ
 			return nil, nil, err
 		}
 
-		proxyConn, err := connectHTTP2(h2clientConn, nil)
+		h2ClientConnWrapper := newH2ClientConn(h2clientConn)
+
+		proxyConn, err := connectHTTP2(h2ClientConnWrapper, nil)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -499,7 +504,7 @@ func (c *Client) setupHTTPTunnel(ctx context.Context, dest net.Destination, targ
 		if _, found := c.cachedH2Conns[dest]; !found {
 			c.cachedH2Conns[dest] = &list.List{}
 		}
-		c.cachedH2Conns[dest].PushFront(h2clientConn)
+		c.cachedH2Conns[dest].PushFront(h2ClientConnWrapper)
 		c.cachedH2Mutex.Unlock()
 
 		return proxyConn, nil, err
@@ -561,4 +566,16 @@ func init() {
 	common.Must(common.RegisterConfig((*ClientConfig)(nil), func(ctx context.Context, config interface{}) (interface{}, error) {
 		return NewClient(ctx, config.(*ClientConfig))
 	}))
+}
+
+// multiBufferBytes copies mb out and releases it.
+func multiBufferBytes(mb buf.MultiBuffer) []byte {
+	if mb.IsEmpty() {
+		buf.ReleaseMulti(mb)
+		return nil
+	}
+	b := make([]byte, mb.Len())
+	mb, _ = buf.SplitBytes(mb, b)
+	buf.ReleaseMulti(mb)
+	return b
 }

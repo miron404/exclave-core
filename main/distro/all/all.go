@@ -63,11 +63,12 @@ import (
 	_ "github.com/exclavenetwork/exclave-core/v5/proxy/anytls"
 	_ "github.com/exclavenetwork/exclave-core/v5/proxy/hysteria2"
 	_ "github.com/exclavenetwork/exclave-core/v5/proxy/juicity"
-	_ "github.com/exclavenetwork/exclave-core/v5/proxy/warpmasque"
+	_ "github.com/exclavenetwork/exclave-core/v5/proxy/masque"
 	_ "github.com/exclavenetwork/exclave-core/v5/proxy/mieru"
 	_ "github.com/exclavenetwork/exclave-core/v5/proxy/shadowquic"
 	_ "github.com/exclavenetwork/exclave-core/v5/proxy/snell"
 	_ "github.com/exclavenetwork/exclave-core/v5/proxy/tuic"
+	_ "github.com/exclavenetwork/exclave-core/v5/proxy/warpmasque"
 	_ "github.com/exclavenetwork/exclave-core/v5/proxy/wireguard"
 
 	_ "github.com/exclavenetwork/exclave-core/v5/proxy/ipc"

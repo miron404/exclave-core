@@ -142,28 +142,43 @@ func (c *Client) Process(ctx context.Context, link *transport.Link, dialer inter
 	ctx, cancel := context.WithCancel(ctx)
 	timer := signal.CancelAfterInactivity(ctx, cancel, p.Timeouts.ConnectionIdle)
 
+	var writer buf.Writer
+	var reader buf.Reader
+	if target.Network == net.Network_TCP {
+		writer = buf.NewWriter(conn)
+		reader = buf.NewReader(conn)
+	} else if _, ok := conn.(*http3PacketConn); ok {
+		readerWriter := newDatagramReaderWriter(conn, target, func(dest net.Destination) (net.Conn, error) {
+			conn, err := c.setupHTTPTunnel(ctx, dest, dialer, nil)
+			if err != nil {
+				return nil, err
+			}
+			newError("tunneling request to ", dest, " via ", c.serverAddress.NetAddr()).WriteToLog(session.ExportIDToError(ctx))
+			return conn, nil
+		})
+		defer readerWriter.close()
+		writer = readerWriter
+		reader = readerWriter
+	} else {
+		readerWriter := newUoTReaderWriter(conn, target, func(dest net.Destination) (net.Conn, error) {
+			conn, err := c.setupHTTPTunnel(ctx, dest, dialer, nil)
+			if err != nil {
+				return nil, err
+			}
+			newError("tunneling request to ", dest, " via ", c.serverAddress.NetAddr()).WriteToLog(session.ExportIDToError(ctx))
+			return conn, nil
+		})
+		defer readerWriter.close()
+		writer = readerWriter
+		reader = readerWriter
+	}
+
 	requestFunc := func() error {
 		defer timer.SetTimeout(p.Timeouts.DownlinkOnly)
-		var writer buf.Writer
-		if target.Network == net.Network_TCP {
-			writer = buf.NewWriter(conn)
-		} else if _, ok := conn.(*http3PacketConn); ok {
-			writer = newDatagramWriter(conn, target)
-		} else {
-			writer = newUoTWriter(conn, target)
-		}
 		return buf.Copy(link.Reader, writer, buf.UpdateActivity(timer))
 	}
 	responseFunc := func() error {
 		defer timer.SetTimeout(p.Timeouts.UplinkOnly)
-		var reader buf.Reader
-		if target.Network == net.Network_TCP {
-			reader = buf.NewReader(conn)
-		} else if _, ok := conn.(*http3PacketConn); ok {
-			reader = newDatagramReader(conn)
-		} else {
-			reader = newUoTReader(conn)
-		}
 		return buf.Copy(reader, link.Writer, buf.UpdateActivity(timer))
 	}
 
@@ -325,11 +340,11 @@ func (c *Client) setupHTTPTunnel(ctx context.Context, target net.Destination, di
 			clientConn.CloseWithError(0, "")
 			return nil, pErr
 		}
-		if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode < 200 || resp.StatusCode > 299 {
 			resp.Body.Close()
 			stream.CancelRead(0)
 			stream.Close()
-			return nil, newError("Proxy responded with non 200 code: " + resp.Status)
+			return nil, newError("Proxy responded with non 2xx code: " + resp.Status)
 		}
 		return &http3Conn{
 			stream: stream,
@@ -348,11 +363,11 @@ func (c *Client) setupHTTPTunnel(ctx context.Context, target net.Destination, di
 			stream.Close()
 			return nil, err
 		}
-		if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode < 200 || resp.StatusCode > 299 {
 			resp.Body.Close()
 			stream.CancelRead(0)
 			stream.Close()
-			return nil, newError("Proxy responded with non 200 code: " + resp.Status)
+			return nil, newError("Proxy responded with non 2xx code: " + resp.Status)
 		}
 		if clientConn.Settings().EnableDatagrams {
 			return &http3PacketConn{

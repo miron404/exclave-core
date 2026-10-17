@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package exclave.core.proxy.masque;
+option csharp_namespace = "Exclave.Core.Proxy.Masque";
+option go_package = "github.com/exclavenetwork/exclave-core/v5/proxy/masque";
+option java_package = "com.github.exclavenetwork.exclave.core.proxy.masque";
+option java_multiple_files = true;
+
+import "common/net/address.proto";
+import "common/protoext/extensions.proto";
+
+message ClientConfig {
+  option (exclave.core.common.protoext.message_opt).type = "outbound";
+  option (exclave.core.common.protoext.message_opt).short_name = "masque";
+  enum DomainStrategy {
+    USE_IP = 0;
+    USE_IP4 = 1;
+    USE_IP6 = 2;
+    PREFER_IP4 = 3;
+    PREFER_IP6 = 4;
+  }
+  exclave.core.common.net.IPOrDomain address = 1;
+  uint32 port = 2;
+  optional string username = 3;
+  optional string password = 4;
+  map<string,string> headers = 5;
+  string uri_template = 6;
+  int32 version = 7;
+  int32 mtu = 8;
+  DomainStrategy domain_strategy = 9;
+}

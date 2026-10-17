@@ -9,7 +9,7 @@ require (
 	github.com/anytls/sing-anytls v0.0.13
 	github.com/apernet/quic-go v0.63.1-0.20261004180939-a10df75c260c
 	github.com/dgryski/go-camellia v0.0.0-20191119043421-69a8a13fb23d
-	github.com/enfein/mieru/v3 v3.38.0
+	github.com/enfein/mieru/v3 v3.38.2
 	github.com/exclavenetwork/hysteria/core/v2 v2.13.0-1
 	github.com/exclavenetwork/hysteria/extras/v2 v2.13.0-1
 	github.com/exclavenetwork/reality v0.0.0-20261008155612-cc902fba9d14
@@ -22,7 +22,7 @@ require (
 	github.com/miekg/dns v1.1.73
 	github.com/miron404/connect-ip-go v0.0.0-20261009183341-d2723e239004
 	github.com/pires/go-proxyproto v0.15.0
-	github.com/quic-go/quic-go v0.63.0
+	github.com/quic-go/quic-go v0.64.0
 	github.com/refraction-networking/utls v1.8.3-0.20260924070827-6af385813fd8
 	github.com/sagernet/sing v0.9.6
 	github.com/sagernet/sing-mux v0.3.9
@@ -38,10 +38,10 @@ require (
 	github.com/yosida95/uritemplate/v3 v3.0.2
 	go.uber.org/mock v0.6.0
 	go4.org/netipx v0.0.0-20260823151212-3075585bcbeb
-	golang.org/x/crypto v0.57.1-0.20261005185213-c3db4df58582
-	golang.org/x/net v0.60.0
-	golang.org/x/sync v0.23.0
-	golang.org/x/sys v0.48.0
+	golang.org/x/crypto v0.58.0
+	golang.org/x/net v0.61.0
+	golang.org/x/sync v0.24.0
+	golang.org/x/sys v0.49.0
 	golang.zx2c4.com/wireguard v0.0.0-20261006164505-2631ce99a06f
 	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12
@@ -58,8 +58,8 @@ require (
 	github.com/gofrs/uuid/v5 v5.5.1 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/hashicorp/yamux v0.1.2 // indirect
-	github.com/klauspost/compress v1.20.1 // indirect
-	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
+	github.com/klauspost/compress v1.20.3 // indirect
+	github.com/klauspost/cpuid/v2 v2.4.1 // indirect
 	github.com/lunixbochs/struc v0.0.0-20241101090106-8d528fa2c543 // indirect
 	github.com/metacubex/cpu v0.1.2 // indirect
 	github.com/metacubex/hkdf v0.1.0 // indirect
@@ -76,7 +76,7 @@ require (
 	github.com/xtaci/smux v1.5.57 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/exp v0.0.0-20250911091902-df9299821621 // indirect
-	golang.org/x/text v0.42.0 // indirect
+	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260706201446-f0a921348800 // indirect
