@@ -10,6 +10,7 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -63,13 +64,13 @@ func (c *Client) InterfaceUpdate() {
 
 func (c *Client) Close() error {
 	c.cachedH2Mutex.Lock()
-	cachedH2Conns := maps.Values(c.cachedH2Conns)
+	// Collected now: maps.Values is lazy, and the map is cleared below.
+	cachedH2Conns := slices.Collect(maps.Values(c.cachedH2Conns))
 	clear(c.cachedH2Conns)
 	c.cachedH2Mutex.Unlock()
-	for cachedH2Conn := range cachedH2Conns {
+	for _, cachedH2Conn := range cachedH2Conns {
 		for elem := cachedH2Conn.Front(); elem != nil; elem = elem.Next() {
 			_ = elem.Value.(*http2ClientConn).Close()
-			cachedH2Conn.Remove(elem)
 		}
 	}
 	return nil

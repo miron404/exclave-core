@@ -5,6 +5,7 @@ import (
 	gotls "crypto/tls"
 	"maps"
 	gonet "net"
+	"slices"
 	"sync"
 	"time"
 
@@ -60,10 +61,11 @@ func (t *transportConnectionState) IsTransientStorageLifecycleReceiver() {
 
 func (t *transportConnectionState) Close() error {
 	t.scopedDialerAccess.Lock()
-	conns := maps.Values(t.scopedDialerMap)
+	// Collected now: maps.Values is lazy, and the map is cleared below.
+	conns := slices.Collect(maps.Values(t.scopedDialerMap))
 	clear(t.scopedDialerMap)
 	t.scopedDialerAccess.Unlock()
-	for conn := range conns {
+	for _, conn := range conns {
 		_ = conn.Close()
 	}
 	return nil

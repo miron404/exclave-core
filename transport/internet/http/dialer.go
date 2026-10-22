@@ -7,6 +7,7 @@ import (
 	gonet "net"
 	"net/http"
 	"net/url"
+	"slices"
 	"sync"
 
 	"golang.org/x/net/http2"
@@ -42,10 +43,11 @@ func (t *transportConnectionState) IsTransientStorageLifecycleReceiver() {
 
 func (t *transportConnectionState) Close() error {
 	t.scopedDialerAccess.Lock()
-	clients := maps.Values(t.scopedDialerMap)
+	// Collected now: maps.Values is lazy, and the map is cleared below.
+	clients := slices.Collect(maps.Values(t.scopedDialerMap))
 	clear(t.scopedDialerMap)
 	t.scopedDialerAccess.Unlock()
-	for client := range clients {
+	for _, client := range clients {
 		client.CloseIdleConnections()
 	}
 	return nil

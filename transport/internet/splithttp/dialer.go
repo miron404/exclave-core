@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -63,10 +64,11 @@ func (t *transportConnectionState) IsTransientStorageLifecycleReceiver() {
 
 func (t *transportConnectionState) Close() error {
 	t.scopedDialerAccess.Lock()
-	managers := maps.Values(t.scopedDialerMap)
+	// Collected now: maps.Values is lazy, and the map is cleared below.
+	managers := slices.Collect(maps.Values(t.scopedDialerMap))
 	clear(t.scopedDialerMap)
 	t.scopedDialerAccess.Unlock()
-	for manager := range managers {
+	for _, manager := range managers {
 		for _, client := range manager.xmuxClients {
 			if c, ok := client.XmuxConn.(*DefaultDialerClient); ok && !c.closed.Load() {
 				c.client.CloseIdleConnections()

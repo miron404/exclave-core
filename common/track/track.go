@@ -35,9 +35,13 @@ func (p *ConnectionPool) Remove(elem *list.Element) {
 func (p *ConnectionPool) ResetConnections() {
 	p.mu.Lock()
 	deadlineSetters := make([]deadlineSetter, 0, p.list.Len())
-	for elem := p.list.Front(); elem != nil; elem = elem.Next() {
+	// Removing an element clears its link to the next one, so the next has
+	// to be taken first, or only the first connection is ever reset.
+	for elem := p.list.Front(); elem != nil; {
+		next := elem.Next()
 		deadlineSetters = append(deadlineSetters, elem.Value.(deadlineSetter))
 		_ = p.list.Remove(elem)
+		elem = next
 	}
 	p.mu.Unlock()
 	now := time.Now()
