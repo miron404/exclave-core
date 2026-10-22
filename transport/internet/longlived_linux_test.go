@@ -3,8 +3,10 @@
 package internet
 
 import (
+	"context"
 	"crypto/tls"
 	gonet "net"
+	"os"
 	"syscall"
 	"testing"
 	"time"
@@ -80,5 +82,77 @@ func TestTuneLongLivedTCPReachesTheSocket(t *testing.T) {
 	defer b.Close()
 	if tuned, _ := TuneLongLivedTCP(a, LongLivedKeepalive, LongLivedUserTimeout); tuned {
 		t.Error("a pipe was reported as tuned")
+	}
+}
+
+// fileConnDialer dials the way the VPN's protected dialer does, a raw socket
+// wrapped by net.FileConn, which Go also gives its 15 second keepalive.
+type fileConnDialer struct{}
+
+func (fileConnDialer) Dial(_ context.Context, _ net.Address, dest net.Destination, _ *SocketConfig) (net.Conn, error) {
+	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_STREAM, unix.IPPROTO_TCP)
+	if err != nil {
+		return nil, err
+	}
+	sa := &unix.SockaddrInet4{Port: int(dest.Port)}
+	copy(sa.Addr[:], dest.Address.IP().To4())
+	if err := unix.Connect(fd, sa); err != nil {
+		unix.Close(fd)
+		return nil, err
+	}
+	file := os.NewFile(uintptr(fd), "socket")
+	defer file.Close()
+	return gonet.FileConn(file)
+}
+
+// Whatever system dialer is in effect, a socket the outbound set no
+// keepalive for idles four minutes before it is probed, not 15 seconds; one
+// it did set keeps its own.
+func TestDialSystemKeepsIdleTCPQuiet(t *testing.T) {
+	listener, err := gonet.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+		}
+	}()
+	port := listener.Addr().(*gonet.TCPAddr).Port
+	dest := net.TCPDestination(net.ParseAddress("127.0.0.1"), net.Port(port))
+
+	defer UseAlternativeSystemDialer(nil)
+	for _, c := range []struct {
+		name     string
+		dialer   SystemDialer
+		sockopt  *SocketConfig
+		wantIdle int
+	}{
+		{"default dialer", nil, nil, int(LongLivedKeepalive.Seconds())},
+		{"protected dialer", fileConnDialer{}, nil, int(LongLivedKeepalive.Seconds())},
+		{"configured", nil, &SocketConfig{TcpKeepAliveIdle: 42}, 42},
+	} {
+		UseAlternativeSystemDialer(c.dialer)
+		conn, err := DialSystem(context.Background(), dest, c.sockopt)
+		if err != nil {
+			t.Fatal(c.name, err)
+		}
+		sc, err := TCPConnOf(conn).SyscallConn()
+		if err != nil {
+			t.Fatal(c.name, err)
+		}
+		_ = sc.Control(func(fd uintptr) {
+			on, _ := syscall.GetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_KEEPALIVE)
+			idle, _ := syscall.GetsockoptInt(int(fd), syscall.IPPROTO_TCP, syscall.TCP_KEEPIDLE)
+			if on != 1 || idle != c.wantIdle {
+				t.Errorf("%s: SO_KEEPALIVE %d, TCP_KEEPIDLE %d, want 1 and %d", c.name, on, idle, c.wantIdle)
+			}
+		})
+		_ = conn.Close()
 	}
 }

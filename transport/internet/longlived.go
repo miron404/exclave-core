@@ -9,9 +9,10 @@ import (
 // a tunnel's single connection to its server.
 const (
 	// LongLivedKeepalive is how long such a connection may sit idle before
-	// the kernel probes it. The dialer otherwise leaves Go's default of 15
-	// seconds, which on a phone is a radio wakeup four times a minute for
-	// every idle connection; four minutes keeps the mapping of most carrier
+	// the kernel probes it, and what every dialed socket gets unless its
+	// outbound says otherwise (see quietenIdleTCP). Go's default of 15
+	// seconds is a radio wakeup four times a minute for every idle
+	// connection on a phone; four minutes keeps the mapping of most carrier
 	// NATs alive at a sixteenth of that.
 	LongLivedKeepalive = 4 * time.Minute
 
@@ -73,4 +74,26 @@ func TuneLongLivedTCP(conn gonet.Conn, keepalive, userTimeout time.Duration) (bo
 		err = setTCPUserTimeout(tcpConn, userTimeout)
 	}
 	return true, err
+}
+
+// quietenIdleTCP gives a freshly dialed socket the long lived keepalive
+// unless its outbound configured one. Go turns keepalive on for every socket
+// it dials or wraps, at 15 seconds of idling, and both the core's dialer and
+// the VPN's protected one take that default. A probe on a socket that sits
+// idle is a radio wakeup, and through a VPN every connection an app keeps
+// idle is one of these sockets, probed although the app never asked for it.
+func quietenIdleTCP(conn gonet.Conn, sockopt *SocketConfig) {
+	if sockopt != nil && (sockopt.TcpKeepAliveIdle != 0 || sockopt.TcpKeepAliveInterval != 0) {
+		return
+	}
+	tcpConn, ok := conn.(*gonet.TCPConn)
+	if !ok {
+		return
+	}
+	_ = tcpConn.SetKeepAliveConfig(gonet.KeepAliveConfig{
+		Enable:   true,
+		Idle:     LongLivedKeepalive,
+		Interval: longLivedKeepaliveRetry,
+		Count:    longLivedKeepaliveCount,
+	})
 }

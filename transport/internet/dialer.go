@@ -114,6 +114,9 @@ func DialSystem(ctx context.Context, dest net.Destination, sockopt *SocketConfig
 	if err != nil {
 		return nil, err
 	}
+	if dest.Network == net.Network_TCP {
+		quietenIdleTCP(rawConn, sockopt)
+	}
 	connectionPool := session.ConnectionPoolFromContext(ctx)
 	if dest.Network == net.Network_TCP && sockopt != nil && sockopt.TlsFragmentation != nil && (sockopt.TlsFragmentation.TlsRecordFragmentation || sockopt.TlsFragmentation.TcpSegmentation) {
 		tlsfragmentConn := tlsfragment.NewTLSFragmentConn(
