@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	gotls "crypto/tls"
+	"maps"
 	gonet "net"
 	"net/http"
 	"net/url"
@@ -41,11 +42,12 @@ func (t *transportConnectionState) IsTransientStorageLifecycleReceiver() {
 
 func (t *transportConnectionState) Close() error {
 	t.scopedDialerAccess.Lock()
-	for _, client := range t.scopedDialerMap {
-		client.CloseIdleConnections()
-	}
+	clients := maps.Values(t.scopedDialerMap)
 	clear(t.scopedDialerMap)
 	t.scopedDialerAccess.Unlock()
+	for client := range clients {
+		client.CloseIdleConnections()
+	}
 	return nil
 }
 

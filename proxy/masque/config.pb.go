@@ -76,11 +76,12 @@ type ClientConfig struct {
 	state          protoimpl.MessageState      `protogen:"open.v1"`
 	Address        *net.IPOrDomain             `protobuf:"bytes,1,opt,name=address,proto3" json:"address,omitempty"`
 	Port           uint32                      `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
+	Level          uint32                      `protobuf:"varint,10,opt,name=level,proto3" json:"level,omitempty"`
 	Username       *string                     `protobuf:"bytes,3,opt,name=username,proto3,oneof" json:"username,omitempty"`
 	Password       *string                     `protobuf:"bytes,4,opt,name=password,proto3,oneof" json:"password,omitempty"`
 	Headers        map[string]string           `protobuf:"bytes,5,rep,name=headers,proto3" json:"headers,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	UriTemplate    string                      `protobuf:"bytes,6,opt,name=uri_template,json=uriTemplate,proto3" json:"uri_template,omitempty"`
-	Version        int32                       `protobuf:"varint,7,opt,name=version,proto3" json:"version,omitempty"`
+	Http3          bool                        `protobuf:"varint,7,opt,name=http3,proto3" json:"http3,omitempty"`
 	Mtu            int32                       `protobuf:"varint,8,opt,name=mtu,proto3" json:"mtu,omitempty"`
 	DomainStrategy ClientConfig_DomainStrategy `protobuf:"varint,9,opt,name=domain_strategy,json=domainStrategy,proto3,enum=exclave.core.proxy.masque.ClientConfig_DomainStrategy" json:"domain_strategy,omitempty"`
 	unknownFields  protoimpl.UnknownFields
@@ -131,6 +132,13 @@ func (x *ClientConfig) GetPort() uint32 {
 	return 0
 }
 
+func (x *ClientConfig) GetLevel() uint32 {
+	if x != nil {
+		return x.Level
+	}
+	return 0
+}
+
 func (x *ClientConfig) GetUsername() string {
 	if x != nil && x.Username != nil {
 		return *x.Username
@@ -159,11 +167,11 @@ func (x *ClientConfig) GetUriTemplate() string {
 	return ""
 }
 
-func (x *ClientConfig) GetVersion() int32 {
+func (x *ClientConfig) GetHttp3() bool {
 	if x != nil {
-		return x.Version
+		return x.Http3
 	}
-	return 0
+	return false
 }
 
 func (x *ClientConfig) GetMtu() int32 {
@@ -184,15 +192,17 @@ var File_proxy_masque_config_proto protoreflect.FileDescriptor
 
 const file_proxy_masque_config_proto_rawDesc = "" +
 	"\n" +
-	"\x19proxy/masque/config.proto\x12\x19exclave.core.proxy.masque\x1a\x18common/net/address.proto\x1a common/protoext/extensions.proto\"\xe9\x04\n" +
+	"\x19proxy/masque/config.proto\x12\x19exclave.core.proxy.masque\x1a\x18common/net/address.proto\x1a common/protoext/extensions.proto\"\xfb\x04\n" +
 	"\fClientConfig\x12=\n" +
 	"\aaddress\x18\x01 \x01(\v2#.exclave.core.common.net.IPOrDomainR\aaddress\x12\x12\n" +
-	"\x04port\x18\x02 \x01(\rR\x04port\x12\x1f\n" +
+	"\x04port\x18\x02 \x01(\rR\x04port\x12\x14\n" +
+	"\x05level\x18\n" +
+	" \x01(\rR\x05level\x12\x1f\n" +
 	"\busername\x18\x03 \x01(\tH\x00R\busername\x88\x01\x01\x12\x1f\n" +
 	"\bpassword\x18\x04 \x01(\tH\x01R\bpassword\x88\x01\x01\x12N\n" +
 	"\aheaders\x18\x05 \x03(\v24.exclave.core.proxy.masque.ClientConfig.HeadersEntryR\aheaders\x12!\n" +
-	"\furi_template\x18\x06 \x01(\tR\vuriTemplate\x12\x18\n" +
-	"\aversion\x18\a \x01(\x05R\aversion\x12\x10\n" +
+	"\furi_template\x18\x06 \x01(\tR\vuriTemplate\x12\x14\n" +
+	"\x05http3\x18\a \x01(\bR\x05http3\x12\x10\n" +
 	"\x03mtu\x18\b \x01(\x05R\x03mtu\x12_\n" +
 	"\x0fdomain_strategy\x18\t \x01(\x0e26.exclave.core.proxy.masque.ClientConfig.DomainStrategyR\x0edomainStrategy\x1a:\n" +
 	"\fHeadersEntry\x12\x10\n" +

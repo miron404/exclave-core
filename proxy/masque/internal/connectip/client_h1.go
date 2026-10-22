@@ -35,7 +35,7 @@ func (c *HTTP1ClientConn) Dial(req *Request) (*Conn, *http.Response, error) {
 	streamCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	stop := context.AfterFunc(ctx, cancel)
 	r := httpReq.Clone(streamCtx)
-	err := r.Write(c.conn)
+	err := r.WriteProxy(c.conn)
 	if err != nil {
 		cancel()
 		return nil, nil, fmt.Errorf("connect-ip: failed to send request: %w", err)

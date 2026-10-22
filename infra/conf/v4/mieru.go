@@ -10,6 +10,7 @@ import (
 type MieruClientConfig struct {
 	Address        *cfgcommon.Address `json:"address"`
 	Port           uint16             `json:"port"`
+	Level          uint32             `json:"level"`
 	PortRange      []string           `json:"portRange"`
 	Username       string             `json:"username"`
 	Password       string             `json:"password"`
@@ -32,6 +33,7 @@ func (c *MieruClientConfig) Build() (proto.Message, error) {
 	config := &mieru.ClientConfig{
 		Address:        c.Address.Build(),
 		Port:           uint32(c.Port),
+		Level:          c.Level,
 		PortRange:      c.PortRange,
 		Username:       c.Username,
 		Password:       c.Password,

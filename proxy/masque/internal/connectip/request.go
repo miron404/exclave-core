@@ -14,12 +14,10 @@ package connectip
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"net/http"
+	"net/url"
 
 	"github.com/quic-go/quic-go/http3"
-	"github.com/yosida95/uritemplate/v3"
 )
 
 const requestProtocol = "connect-ip"
@@ -30,47 +28,41 @@ type Request struct {
 	req *http.Request
 }
 
-func NewRequest(ctx context.Context, proxyTemplate *uritemplate.Template) (*Request, error) {
-	if len(proxyTemplate.Varnames()) > 0 {
-		return nil, errors.New("connect-ip: IP flow forwarding not supported")
+func NewRequest(ctx context.Context, u *url.URL) (*Request, error) {
+	req := &http.Request{
+		Method: http.MethodConnect,
+		URL:    u,
+		Host:   u.Host,
+		Header: make(http.Header),
+		Proto:  requestProtocol,
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodConnect, proxyTemplate.Raw(), nil)
-	if err != nil {
-		return nil, fmt.Errorf("connect-ip: failed to create request: %w", err)
-	}
-	req.Proto = requestProtocol
-	req.Host = req.URL.Host
 	req.Header.Set(http3.CapsuleProtocolHeader, capsuleProtocolHeaderValue)
-	return &Request{req: req}, nil
+	return &Request{req: req.WithContext(ctx)}, nil
 }
 
-func NewHTTP2Request(ctx context.Context, proxyTemplate *uritemplate.Template) (*Request, error) {
-	if len(proxyTemplate.Varnames()) > 0 {
-		return nil, errors.New("connect-ip: IP flow forwarding not supported")
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodConnect, proxyTemplate.Raw(), nil)
-	if err != nil {
-		return nil, fmt.Errorf("connect-ip: failed to create request: %w", err)
+func NewHTTP2Request(ctx context.Context, u *url.URL) (*Request, error) {
+	req := &http.Request{
+		Method: http.MethodConnect,
+		URL:    u,
+		Host:   u.Host,
+		Header: make(http.Header),
 	}
 	req.Header.Set(":protocol", requestProtocol)
-	req.Host = req.URL.Host
 	req.Header.Set(http3.CapsuleProtocolHeader, capsuleProtocolHeaderValue)
-	return &Request{req: req}, nil
+	return &Request{req: req.WithContext(ctx)}, nil
 }
 
-func NewHTTP1Request(ctx context.Context, proxyTemplate *uritemplate.Template) (*Request, error) {
-	if len(proxyTemplate.Varnames()) > 0 {
-		return nil, errors.New("connect-ip: IP flow forwarding not supported")
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, proxyTemplate.Raw(), nil)
-	if err != nil {
-		return nil, fmt.Errorf("connect-ip: failed to create request: %w", err)
+func NewHTTP1Request(ctx context.Context, u *url.URL) (*Request, error) {
+	req := &http.Request{
+		Method: http.MethodGet,
+		URL:    u,
+		Host:   u.Host,
+		Header: make(http.Header),
 	}
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", requestProtocol)
-	req.Host = req.URL.Host
 	req.Header.Set(http3.CapsuleProtocolHeader, capsuleProtocolHeaderValue)
-	return &Request{req: req}, nil
+	return &Request{req: req.WithContext(ctx)}, nil
 }
 
 func (r *Request) Header() http.Header {

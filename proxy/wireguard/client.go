@@ -82,17 +82,16 @@ func (c *Client) InterfaceUpdate() {
 
 func (c *Client) Close() error {
 	c.wgLock.Lock()
-	defer c.wgLock.Unlock()
-	if c.net != nil {
-		net := c.net
-		go func() {
-			_ = net.Close()
-		}()
-		c.net = nil
+	net := c.net
+	c.net = nil
+	bind := c.bind
+	c.bind = nil
+	c.wgLock.Unlock()
+	if net != nil {
+		go net.Close()
 	}
-	if c.bind != nil {
-		_ = c.bind.Close()
-		c.bind = nil
+	if bind != nil {
+		_ = bind.Close()
 	}
 	return nil
 }

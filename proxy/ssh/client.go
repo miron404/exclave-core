@@ -265,29 +265,31 @@ func (c *Client) connect(ctx context.Context, dialer internet.Dialer) (*sshClien
 		err := client.Wait()
 		newError("ssh client closed").Base(err).AtDebug().WriteToLog()
 		c.clientAccess.Lock()
-		client.Close()
 		c.client = nil
 		c.clientAccess.Unlock()
+		client.Close()
 	}()
 	return client, nil
 }
 
 func (c *Client) InterfaceUpdate() {
 	c.clientAccess.Lock()
-	if c.client != nil {
-		c.client.Close()
-	}
+	client := c.client
 	c.client = nil
 	c.clientAccess.Unlock()
+	if client != nil {
+		client.Close()
+	}
 }
 
 func (c *Client) Close() error {
 	c.closed = true
 	c.clientAccess.Lock()
-	if c.client != nil {
-		c.client.Close()
-	}
+	client := c.client
 	c.client = nil
 	c.clientAccess.Unlock()
+	if client != nil {
+		client.Close()
+	}
 	return nil
 }

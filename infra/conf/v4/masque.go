@@ -12,11 +12,12 @@ import (
 type MASQUEClientConfig struct {
 	Address        *cfgcommon.Address `json:"address"`
 	Port           uint16             `json:"port"`
+	Level          uint32             `json:"level"`
 	Username       *string            `json:"username"`
 	Password       *string            `json:"password"`
 	Headers        map[string]string  `json:"headers"`
 	URITemplate    string             `json:"uriTemplate"`
-	Version        int32              `json:"version"`
+	HTTP3          bool               `json:"http3"`
 	MTU            int32              `json:"mtu"`
 	DomainStrategy string             `json:"domainStrategy"`
 }
@@ -28,11 +29,12 @@ func (c *MASQUEClientConfig) Build() (proto.Message, error) {
 	config := &masque.ClientConfig{
 		Address:     c.Address.Build(),
 		Port:        uint32(c.Port),
+		Level:       c.Level,
 		Username:    c.Username,
 		Password:    c.Password,
 		Headers:     c.Headers,
 		UriTemplate: c.URITemplate,
-		Version:     c.Version,
+		Http3:       c.HTTP3,
 		Mtu:         c.MTU,
 	}
 	switch strings.ToLower(c.DomainStrategy) {

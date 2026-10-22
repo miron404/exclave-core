@@ -22,7 +22,7 @@ require (
 	github.com/miekg/dns v1.1.73
 	github.com/miron404/connect-ip-go v0.0.0-20261009183341-d2723e239004
 	github.com/pires/go-proxyproto v0.15.0
-	github.com/quic-go/quic-go v0.64.0
+	github.com/quic-go/quic-go v0.64.1
 	github.com/refraction-networking/utls v1.8.3-0.20260924070827-6af385813fd8
 	github.com/sagernet/sing v0.9.6
 	github.com/sagernet/sing-mux v0.3.9
@@ -71,7 +71,7 @@ require (
 	github.com/metacubex/utls v1.8.8 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/riobard/go-bloom v0.0.0-20200614022211-cdc8013cb5b3 // indirect
-	github.com/sagernet/quic-go v0.61.0-sing-box-mod.9 // indirect
+	github.com/sagernet/quic-go v0.61.0-sing-box-mod.11 // indirect
 	github.com/sagernet/smux v1.5.50-sing-box-mod.1 // indirect
 	github.com/xtaci/smux v1.5.57 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect

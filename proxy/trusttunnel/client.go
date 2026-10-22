@@ -53,16 +53,17 @@ func (c *Client) InterfaceUpdate() {
 
 func (c *Client) Close() error {
 	c.transportLock.Lock()
-	if c.transport != nil {
+	transport := c.transport
+	c.transport = nil
+	c.transportLock.Unlock()
+	if transport != nil {
 		switch transport := c.transport.(type) {
 		case *http3.Transport:
 			transport.Close()
 		case *http2.Transport:
 			transport.CloseIdleConnections()
 		}
-		c.transport = nil
 	}
-	c.transportLock.Unlock()
 	return nil
 }
 

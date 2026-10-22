@@ -163,9 +163,11 @@ func (o *Outbound) InterfaceUpdate() {
 
 func (o *Outbound) Close() error {
 	o.clientAccess.Lock()
-	if o.client != nil {
-		o.client.Close()
-	}
+	client := o.client
+	o.client = nil
 	o.clientAccess.Unlock()
+	if client != nil {
+		client.Close()
+	}
 	return nil
 }

@@ -276,17 +276,20 @@ func (o *Outbound) Process(ctx context.Context, link *transport.Link, dialer int
 
 func (o *Outbound) InterfaceUpdate() {
 	o.clientAccess.Lock()
-	if o.client != nil {
-		o.client.Reset()
-	}
+	client := o.client
 	o.clientAccess.Unlock()
+	if client != nil {
+		client.Reset()
+	}
 }
 
 func (o *Outbound) Close() error {
 	o.clientAccess.Lock()
-	if o.client != nil {
-		_ = o.client.Close()
-	}
+	client := o.client
+	o.client = nil
 	o.clientAccess.Unlock()
+	if client != nil {
+		_ = client.Close()
+	}
 	return nil
 }

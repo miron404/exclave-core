@@ -2,6 +2,7 @@ package quic
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -238,11 +239,12 @@ func (t *transportConnectionState) IsTransientStorageLifecycleReceiver() {
 
 func (t *transportConnectionState) Close() error {
 	t.scopedDialerAccess.Lock()
-	for _, conn := range t.scopedDialerMap {
-		_ = conn.Close()
-	}
+	conns := maps.Values(t.scopedDialerMap)
 	clear(t.scopedDialerMap)
 	t.scopedDialerAccess.Unlock()
+	for conn := range conns {
+		_ = conn.Close()
+	}
 	return nil
 }
 

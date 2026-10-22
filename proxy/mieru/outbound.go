@@ -8,13 +8,16 @@ import (
 	mierucommon "github.com/enfein/mieru/v3/apis/common"
 	mierumodel "github.com/enfein/mieru/v3/apis/model"
 
+	core "github.com/exclavenetwork/exclave-core/v5"
 	"github.com/exclavenetwork/exclave-core/v5/app/proxyman/outbound"
 	"github.com/exclavenetwork/exclave-core/v5/common"
 	"github.com/exclavenetwork/exclave-core/v5/common/buf"
 	"github.com/exclavenetwork/exclave-core/v5/common/net"
 	"github.com/exclavenetwork/exclave-core/v5/common/session"
+	"github.com/exclavenetwork/exclave-core/v5/common/signal"
 	"github.com/exclavenetwork/exclave-core/v5/common/task"
 	"github.com/exclavenetwork/exclave-core/v5/features/dns/localdns"
+	"github.com/exclavenetwork/exclave-core/v5/features/policy"
 	"github.com/exclavenetwork/exclave-core/v5/proxy"
 	"github.com/exclavenetwork/exclave-core/v5/transport"
 	"github.com/exclavenetwork/exclave-core/v5/transport/internet"
@@ -34,10 +37,11 @@ var (
 )
 
 type Outbound struct {
-	serverAddr   net.Destination
-	config       *ClientConfig
-	client       mieruclient.Client
-	clientAccess sync.Mutex
+	serverAddr    net.Destination
+	config        *ClientConfig
+	policyManager policy.Manager
+	client        mieruclient.Client
+	clientAccess  sync.Mutex
 }
 
 func NewClient(ctx context.Context, config *ClientConfig) (*Outbound, error) {
@@ -56,9 +60,11 @@ func NewClient(ctx context.Context, config *ClientConfig) (*Outbound, error) {
 	default:
 		return nil, newError("unknown protocol")
 	}
+	v := core.MustFromContext(ctx)
 	return &Outbound{
-		serverAddr: serverAddr,
-		config:     config,
+		serverAddr:    serverAddr,
+		config:        config,
+		policyManager: v.GetFeature(policy.ManagerType()).(policy.Manager),
 	}, nil
 }
 
@@ -143,6 +149,10 @@ func (o *Outbound) Process(ctx context.Context, link *transport.Link, dialer int
 		}
 	}
 
+	sessionPolicy := o.policyManager.ForLevel(o.config.Level)
+	ctx, cancel := context.WithCancel(ctx)
+	timer := signal.CancelAfterInactivity(ctx, cancel, sessionPolicy.Timeouts.ConnectionIdle)
+
 	conn, err := client.DialContext(ctx, addr)
 	if err != nil {
 		return err
@@ -163,9 +173,11 @@ func (o *Outbound) Process(ctx context.Context, link *transport.Link, dialer int
 	}
 
 	if err := task.Run(ctx, func() error {
-		return buf.Copy(link.Reader, writer)
+		defer timer.SetTimeout(sessionPolicy.Timeouts.DownlinkOnly)
+		return buf.Copy(link.Reader, writer, buf.UpdateActivity(timer))
 	}, func() error {
-		return buf.Copy(reader, link.Writer)
+		defer timer.SetTimeout(sessionPolicy.Timeouts.UplinkOnly)
+		return buf.Copy(reader, link.Writer, buf.UpdateActivity(timer))
 	}); err != nil {
 		return newError("connection ends").Base(err)
 	}
@@ -178,11 +190,11 @@ func (o *Outbound) InterfaceUpdate() {
 
 func (o *Outbound) Close() error {
 	o.clientAccess.Lock()
-	if o.client != nil {
-		client := o.client
-		go client.Stop() // blocking call
-		o.client = nil
-	}
+	client := o.client
+	o.client = nil
 	o.clientAccess.Unlock()
+	if client != nil {
+		go client.Stop() // blocking call
+	}
 	return nil
 }

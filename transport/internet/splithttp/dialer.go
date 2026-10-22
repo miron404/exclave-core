@@ -5,6 +5,7 @@ import (
 	gotls "crypto/tls"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
@@ -62,15 +63,16 @@ func (t *transportConnectionState) IsTransientStorageLifecycleReceiver() {
 
 func (t *transportConnectionState) Close() error {
 	t.scopedDialerAccess.Lock()
-	for _, manager := range t.scopedDialerMap {
+	managers := maps.Values(t.scopedDialerMap)
+	clear(t.scopedDialerMap)
+	t.scopedDialerAccess.Unlock()
+	for manager := range managers {
 		for _, client := range manager.xmuxClients {
 			if c, ok := client.XmuxConn.(*DefaultDialerClient); ok && !c.closed.Load() {
 				c.client.CloseIdleConnections()
 			}
 		}
 	}
-	clear(t.scopedDialerMap)
-	t.scopedDialerAccess.Unlock()
 	return nil
 }
 

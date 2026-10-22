@@ -21,6 +21,7 @@ type ClientConfig struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	Address        *net.IPOrDomain        `protobuf:"bytes,1,opt,name=address,proto3" json:"address,omitempty"`
 	Port           uint32                 `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
+	Level          uint32                 `protobuf:"varint,10,opt,name=level,proto3" json:"level,omitempty"`
 	PortRange      []string               `protobuf:"bytes,3,rep,name=port_range,json=portRange,proto3" json:"port_range,omitempty"`
 	Username       string                 `protobuf:"bytes,4,opt,name=username,proto3" json:"username,omitempty"`
 	Password       string                 `protobuf:"bytes,5,opt,name=password,proto3" json:"password,omitempty"`
@@ -72,6 +73,13 @@ func (x *ClientConfig) GetAddress() *net.IPOrDomain {
 func (x *ClientConfig) GetPort() uint32 {
 	if x != nil {
 		return x.Port
+	}
+	return 0
+}
+
+func (x *ClientConfig) GetLevel() uint32 {
+	if x != nil {
+		return x.Level
 	}
 	return 0
 }
@@ -129,10 +137,12 @@ var File_proxy_mieru_config_proto protoreflect.FileDescriptor
 
 const file_proxy_mieru_config_proto_rawDesc = "" +
 	"\n" +
-	"\x18proxy/mieru/config.proto\x12\x18exclave.core.proxy.mieru\x1a common/protoext/extensions.proto\x1a\x18common/net/address.proto\"\xdf\x02\n" +
+	"\x18proxy/mieru/config.proto\x12\x18exclave.core.proxy.mieru\x1a common/protoext/extensions.proto\x1a\x18common/net/address.proto\"\xf5\x02\n" +
 	"\fClientConfig\x12=\n" +
 	"\aaddress\x18\x01 \x01(\v2#.exclave.core.common.net.IPOrDomainR\aaddress\x12\x12\n" +
-	"\x04port\x18\x02 \x01(\rR\x04port\x12\x1d\n" +
+	"\x04port\x18\x02 \x01(\rR\x04port\x12\x14\n" +
+	"\x05level\x18\n" +
+	" \x01(\rR\x05level\x12\x1d\n" +
 	"\n" +
 	"port_range\x18\x03 \x03(\tR\tportRange\x12\x1a\n" +
 	"\busername\x18\x04 \x01(\tR\busername\x12\x1a\n" +

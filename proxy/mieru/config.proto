@@ -15,6 +15,7 @@ message ClientConfig {
 
   exclave.core.common.net.IPOrDomain address = 1;
   uint32 port = 2;
+  uint32 level = 10;
   repeated string port_range = 3;
   string username = 4;
   string password = 5;
