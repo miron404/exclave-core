@@ -182,6 +182,13 @@ func (s *QUICNameServer) updateIP(req *dnsRequest, ipRec *IPRecord) {
 	elapsed := time.Since(req.start)
 
 	s.Lock()
+	if s.ips == nil {
+		// Closed while the query was out, as a test instance is when its
+		// test ends: there is no cache left to write to, and the cleanup
+		// must not be started again.
+		s.Unlock()
+		return
+	}
 	rec := s.ips[req.domain]
 	updated := false
 

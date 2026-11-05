@@ -274,6 +274,13 @@ func (s *ClassicNameServer) HandleResponse(ctx context.Context, packet *udp_prot
 
 func (s *ClassicNameServer) updateIP(domain string, newRec record) {
 	s.Lock()
+	if s.ips == nil {
+		// Closed while the query was out, as a test instance is when its
+		// test ends: there is no cache left to write to, and the cleanup
+		// must not be started again.
+		s.Unlock()
+		return
+	}
 
 	newError(s.name, " updating IP records for domain:", domain).AtDebug().WriteToLog()
 	rec := s.ips[domain]
@@ -441,7 +448,9 @@ func (s *ClassicNameServer) findIPsForDomain(domain string, option dns_feature.I
 
 	if updated {
 		s.Lock()
-		s.ips[domain] = record
+		if s.ips != nil {
+			s.ips[domain] = record
+		}
 		s.Unlock()
 	}
 
