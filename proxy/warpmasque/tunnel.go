@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"net/netip"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,8 +25,8 @@ const (
 	datagramContextIDHeadroom = 1
 
 	// pumpShutdownGrace bounds how long a reconnect waits for the previous
-	// pumps to exit. A device reader may still be parked in a blocking read;
-	// readMutex serializes it against the next cycle.
+	// pumps to exit. They all give up as soon as the session is closed, so
+	// this is only a guard against one that does not.
 	pumpShutdownGrace = 2 * time.Second
 
 	// minimumTunnelMTU is the floor for automatic MTU reduction: below the
@@ -74,12 +75,17 @@ type tunnel struct {
 	// when the MTU is below its minimum, whatever the device was assigned.
 	hasIPv4, hasIPv6 bool
 
-	// readMutex serializes device reads across reconnect cycles. It also covers
-	// the scratch the device read needs, which is reused rather than allocated
-	// for every packet.
-	readMutex   sync.Mutex
-	readBuffers [][]byte
-	readSizes   []int
+	// packets carries what the stack sends out, read from the device by a
+	// single goroutine for the life of the tunnel. A pump waiting on it can
+	// give up the moment its session ends, which a pump parked in a device
+	// read could not: it held on until the next packet came and dropped that
+	// one, so the packet that should have brought the session back was lost.
+	// The channel is closed once the device is.
+	packets    chan outgoingPacket
+	bufferPool sync.Pool
+	// carried holds a packet a pump took for a session that has ended, for
+	// the next session to send first.
+	carried chan outgoingPacket
 
 	// Each of these reports once, so a condition that repeats per packet does
 	// not fill the log.
@@ -99,6 +105,13 @@ type tunnel struct {
 	searchGeneration uint32
 	bestDatagramMTU  int
 	refusedSince     time.Time
+}
+
+// outgoingPacket is one packet the stack sent, at buf[datagramContextIDHeadroom:]
+// and n bytes long, in a buffer from the tunnel's pool.
+type outgoingPacket struct {
+	buf *[]byte
+	n   int
 }
 
 func newTunnel(ctx context.Context, o *Outbound, dialer internet.Dialer) (*tunnel, error) {
@@ -123,16 +136,20 @@ func newTunnel(ctx context.Context, o *Outbound, dialer internet.Dialer) (*tunne
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	t := &tunnel{
-		outbound:    o,
-		device:      device,
-		net:         netStack,
-		mtu:         o.mtu,
-		cancel:      cancel,
-		done:        make(chan struct{}),
-		readBuffers: make([][]byte, 1),
-		readSizes:   make([]int, 1),
+		outbound: o,
+		device:   device,
+		net:      netStack,
+		mtu:      o.mtu,
+		cancel:   cancel,
+		done:     make(chan struct{}),
+		packets:  make(chan outgoingPacket),
+		carried:  make(chan outgoingPacket, 1),
 
 		networkChanged: make(chan struct{}, 1),
+	}
+	t.bufferPool.New = func() any {
+		buf := make([]byte, t.mtu+datagramContextIDHeadroom)
+		return &buf
 	}
 	for _, address := range addresses {
 		if address.Is4() {
@@ -141,6 +158,7 @@ func newTunnel(ctx context.Context, o *Outbound, dialer internet.Dialer) (*tunne
 			t.hasIPv6 = true
 		}
 	}
+	go t.readDevice(runCtx)
 	go func() {
 		defer close(t.done)
 		t.maintain(runCtx, o, dialer)
@@ -181,21 +199,60 @@ func (t *tunnel) DialUDPAddrPort(laddr, raddr netip.AddrPort) (net.Conn, error) 
 	return t.net.DialUDPAddrPort(laddr, raddr)
 }
 
-// readPacket reads one packet from the stack into a buffer that already has
-// room for the datagram context ID. It returns the full buffer and the packet
-// length.
-func (t *tunnel) readPacket(buf []byte) (int, error) {
-	t.readMutex.Lock()
-	t.readBuffers[0] = buf[datagramContextIDHeadroom:]
-	t.readSizes[0] = 0
-	_, err := t.device.Read(t.readBuffers, t.readSizes, 0)
-	n := t.readSizes[0]
-	t.readBuffers[0] = nil
-	t.readMutex.Unlock()
-	if err != nil {
-		return 0, err
+// readDevice reads what the stack sends out and hands it to whichever of the
+// supervisor or the outgoing pump is waiting, until the device is closed.
+func (t *tunnel) readDevice(ctx context.Context) {
+	defer close(t.packets)
+	buffers := make([][]byte, 1)
+	sizes := make([]int, 1)
+	for {
+		bufPtr := t.bufferPool.Get().(*[]byte)
+		buffers[0], sizes[0] = (*bufPtr)[datagramContextIDHeadroom:], 0
+		_, err := t.device.Read(buffers, sizes, 0)
+		buffers[0] = nil
+		if err != nil {
+			// The device only fails once it is closed.
+			t.bufferPool.Put(bufPtr)
+			if ctx.Err() == nil {
+				newError("failed to read from the virtual network stack").Base(err).AtWarning().WriteToLog()
+			}
+			return
+		}
+		select {
+		case t.packets <- outgoingPacket{buf: bufPtr, n: sizes[0]}:
+		case <-ctx.Done():
+			t.bufferPool.Put(bufPtr)
+			return
+		}
 	}
-	return n, nil
+}
+
+// release hands a packet's buffer back to the pool.
+func (t *tunnel) release(p outgoingPacket) {
+	if p.buf != nil {
+		t.bufferPool.Put(p.buf)
+	}
+}
+
+// carry keeps p for the next session. Only one is kept: by the time a
+// session is up again, anything older has been retransmitted anyway.
+func (t *tunnel) carry(p outgoingPacket) {
+	select {
+	case old := <-t.carried:
+		t.release(old)
+	default:
+	}
+	t.carried <- p
+}
+
+// takeCarried returns the packet kept for the next session, if any.
+func (t *tunnel) takeCarried() (outgoingPacket, bool) {
+	select {
+	case p := <-t.carried:
+		return p, true
+	default:
+		return outgoingPacket{}, false
+	}
 }
 
 // writePacket hands a packet to the stack. The caller owns the scratch, since
@@ -211,39 +268,51 @@ func (t *tunnel) writePacket(scratch [][]byte, packet []byte) error {
 // maintain keeps a CONNECT-IP session attached to the stack, reconnecting on
 // failure with a capped exponential backoff.
 //
-// After the first session is lost the supervisor parks on a device read until
-// something inside the stack actually wants to send. That keeps a tunnel that
-// broke while idle from redialing in a loop, and the packet that woke it up is
-// carried over into the new session instead of being dropped.
+// A session is only ever dialed for a packet that something inside the stack
+// wants to send, and that packet is the first the new session carries. So a
+// tunnel that broke while idle stays down, at no cost, until it is used again,
+// and one whose endpoint cannot be reached, a network that blocks it or no
+// network at all, tries again only while something still asks for it, never
+// more often than the backoff allows, instead of on a timer for as long as the
+// tunnel exists.
 func (t *tunnel) maintain(ctx context.Context, o *Outbound, dialer internet.Dialer) {
-	bufferPool := sync.Pool{New: func() any {
-		buf := make([]byte, t.mtu+datagramContextIDHeadroom)
-		return &buf
-	}}
 	backoff := reconnectDelayMin
-	connected := false
-	var pending []byte
-	var pendingLength int
+	// nextDial is the earliest a dial may be tried after one failed.
+	var nextDial time.Time
+	var pending outgoingPacket
 
 	for {
 		if ctx.Err() != nil {
+			t.release(pending)
 			return
 		}
 
-		if connected && pending == nil {
-			buf := make([]byte, t.mtu+datagramContextIDHeadroom)
-			n, err := t.readPacket(buf)
-			if err != nil {
-				if ctx.Err() != nil {
+		if pending.buf == nil {
+			var ok bool
+			if pending, ok = t.takeCarried(); !ok {
+				changed, open := t.waitForPacket(ctx, &pending)
+				if !open {
 					return
 				}
-				newError("failed to read from the virtual network stack").Base(err).AtWarning().WriteToLog()
-				if sleep(ctx, backoff) != nil {
-					return
+				if changed {
+					// What failed on the old network says nothing about
+					// the new one.
+					backoff, nextDial = reconnectDelayMin, time.Time{}
+					continue
 				}
-				continue
 			}
-			pending, pendingLength = buf, n
+		}
+
+		if wait := time.Until(nextDial); wait > 0 {
+			changed, open := t.holdUntil(ctx, wait, &pending)
+			if !open {
+				t.release(pending)
+				return
+			}
+			if changed {
+				backoff = reconnectDelayMin
+			}
+			nextDial = time.Time{}
 		}
 
 		// The HTTP/2 transport keeps its request open for as long as the tunnel
@@ -260,35 +329,31 @@ func (t *tunnel) maintain(ctx context.Context, o *Outbound, dialer internet.Dial
 		if err != nil {
 			cancelDial()
 			if ctx.Err() != nil {
+				t.release(pending)
 				return
 			}
 			if timedOut {
 				err = newError("timed out after ", dialTimeout).Base(err)
 			}
 			newError("failed to establish the MASQUE tunnel").Base(err).AtWarning().WriteToLog()
-			changed, err := t.sleepUnlessNetworkChanges(ctx, backoff)
-			if err != nil {
-				return
-			}
-			if changed {
-				// What failed on the old network says nothing about the new one.
-				backoff = reconnectDelayMin
-			} else {
-				backoff = min(backoff*2, reconnectDelayMax)
-			}
+			// The packet is stale by the time another dial may be tried;
+			// whatever still wants out will send again, and that is what
+			// the next attempt waits for.
+			t.release(pending)
+			pending = outgoingPacket{}
+			nextDial = time.Now().Add(backoff)
+			backoff = min(backoff*2, reconnectDelayMax)
 			continue
 		}
 		sess.cancel = cancelDial
 		backoff = reconnectDelayMin
-		connected = true
 		newError("MASQUE tunnel established").AtInfo().WriteToLog()
 
-		if pending != nil {
-			if _, err := sess.ipConn.WritePacketBuffer(pending, datagramContextIDHeadroom, pendingLength); err != nil {
-				newError("failed to send the first packet").Base(err).AtDebug().WriteToLog()
-			}
-			pending, pendingLength = nil, 0
+		if _, err := sess.ipConn.WritePacketBuffer(*pending.buf, datagramContextIDHeadroom, pending.n); err != nil {
+			newError("failed to send the first packet").Base(err).AtDebug().WriteToLog()
 		}
+		t.release(pending)
+		pending = outgoingPacket{}
 
 		errChan := make(chan error, 2)
 		pumpCtx, cancelPumps := context.WithCancel(ctx)
@@ -313,7 +378,7 @@ func (t *tunnel) maintain(ctx context.Context, o *Outbound, dialer internet.Dial
 		go func() {
 			defer wg.Done()
 			defer close(icmpQueue)
-			errChan <- t.pumpToTunnel(pumpCtx, sess, &bufferPool, icmpQueue)
+			errChan <- t.pumpToTunnel(pumpCtx, sess, icmpQueue)
 		}()
 		go func() {
 			defer wg.Done()
@@ -321,16 +386,55 @@ func (t *tunnel) maintain(ctx context.Context, o *Outbound, dialer internet.Dial
 		}()
 
 		err = t.followSession(ctx, o, dialer, sess, errChan)
+		cancelPumps()
+		sess.Close()
 		if ctx.Err() != nil {
-			cancelPumps()
-			sess.Close()
 			return
 		}
 		newError("MASQUE tunnel lost, reconnecting").Base(err).AtInfo().WriteToLog()
-
-		cancelPumps()
-		sess.Close()
 		waitPumps(&wg)
+	}
+}
+
+// waitForPacket waits for something to send and leaves it in p. It reports
+// whether the network changed meanwhile, which ends the wait with nothing in p,
+// and whether the tunnel is still open.
+func (t *tunnel) waitForPacket(ctx context.Context, p *outgoingPacket) (changed, open bool) {
+	select {
+	case <-ctx.Done():
+		return false, false
+	case <-t.networkChanged:
+		return true, true
+	case packet, ok := <-t.packets:
+		if !ok {
+			return false, false
+		}
+		*p = packet
+		return false, true
+	}
+}
+
+// holdUntil waits out a backoff of d with a packet in hand, or less if the
+// network changes. The stack is drained meanwhile so that it is not held up,
+// and the newest packet is the one kept.
+func (t *tunnel) holdUntil(ctx context.Context, d time.Duration, p *outgoingPacket) (changed, open bool) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false, false
+		case <-t.networkChanged:
+			return true, true
+		case <-timer.C:
+			return false, true
+		case packet, ok := <-t.packets:
+			if !ok {
+				return false, false
+			}
+			t.release(*p)
+			*p = packet
+		}
 	}
 }
 
@@ -363,62 +467,54 @@ func (t *tunnel) takeNetworkChange() {
 	}
 }
 
-// sleepUnlessNetworkChanges waits for d, or less if the network changes. It
-// reports whether it did.
-func (t *tunnel) sleepUnlessNetworkChanges(ctx context.Context, d time.Duration) (bool, error) {
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false, ctx.Err()
-	case <-t.networkChanged:
-		return true, nil
-	case <-timer.C:
-		return false, nil
-	}
-}
-
 // pumpToTunnel forwards packets from the stack into the CONNECT-IP session and
 // injects any ICMP error the session generates back into the stack.
-func (t *tunnel) pumpToTunnel(ctx context.Context, sess *ipSession, bufferPool *sync.Pool, icmpQueue chan<- []byte) error {
+//
+// A packet taken for a session that has ended, or one the session could not
+// send because it had just closed, is carried over to the next session rather
+// than dropped: it is what wants that session.
+func (t *tunnel) pumpToTunnel(ctx context.Context, sess *ipSession, icmpQueue chan<- []byte) error {
 	for {
+		var p outgoingPacket
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case packet, ok := <-t.packets:
+			if !ok {
+				return os.ErrClosed
+			}
+			p = packet
+		}
 		if ctx.Err() != nil {
+			t.carry(p)
 			return ctx.Err()
 		}
-		bufPtr := bufferPool.Get().(*[]byte)
-		n, err := t.readPacket(*bufPtr)
-		if err != nil {
-			bufferPool.Put(bufPtr)
-			return err
-		}
-		if ctx.Err() != nil {
-			bufferPool.Put(bufPtr)
-			return ctx.Err()
-		}
-		icmp, err := sess.ipConn.WritePacketBuffer(*bufPtr, datagramContextIDHeadroom, n)
-		bufferPool.Put(bufPtr)
+		icmp, err := sess.ipConn.WritePacketBuffer(*p.buf, datagramContextIDHeadroom, p.n)
 		if err == nil && len(icmp) == 0 {
 			// An ICMP answer means the packet was refused, not sent.
-			sess.counters.addWrite(n)
+			sess.counters.addWrite(p.n)
 			sess.liveness.sent()
 		}
 		if err != nil {
 			if errors.As(err, new(*connectip.CloseError)) {
+				t.carry(p)
 				return err
 			}
+			t.release(p)
 			// A single rejected packet must not take the tunnel down, but it is
 			// worth saying why once: a packet that never fits is an MTU that is
 			// too high for the path, and it stalls everything except the
 			// smallest exchanges.
-			t.reportDroppedPacket(n, err)
+			t.reportDroppedPacket(p.n, err)
 			continue
 		}
+		t.release(p)
 		if len(icmp) > 0 {
 			// The packet did not fit a datagram on this path. The answer is an
 			// ICMP "packet too big" naming the size that does fit, which makes
 			// the stack shrink that one flow. That only helps flows that honour
 			// it, so the size is also remembered for the tunnel as a whole.
-			t.noteOversizedPacket(n, nextHopMTU(icmp), sess.canDiscoverPathMTU)
+			t.noteOversizedPacket(p.n, nextHopMTU(icmp), sess.canDiscoverPathMTU)
 			select {
 			case icmpQueue <- icmp:
 			default:

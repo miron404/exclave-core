@@ -157,8 +157,9 @@ func TestNetworkChangeIsHeldNotActedOn(t *testing.T) {
 	tun := &tunnel{networkChanged: make(chan struct{}, 1)}
 	tun.NetworkChanged()
 	tun.NetworkChanged() // coalesced, never blocks
-	changed, err := tun.sleepUnlessNetworkChanges(context.Background(), time.Hour)
-	if err != nil || !changed {
+	var held outgoingPacket
+	changed, open := tun.holdUntil(context.Background(), time.Hour, &held)
+	if !open || !changed {
 		t.Fatal("a pending network change did not cut the backoff short")
 	}
 	tun.NetworkChanged()
