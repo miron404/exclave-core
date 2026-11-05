@@ -9,7 +9,6 @@ import (
 	"github.com/sagernet/sing/common/bufio"
 	"github.com/sagernet/sing/common/network"
 
-	core "github.com/exclavenetwork/exclave-core/v5"
 	"github.com/exclavenetwork/exclave-core/v5/app/proxyman/outbound"
 	"github.com/exclavenetwork/exclave-core/v5/common"
 	"github.com/exclavenetwork/exclave-core/v5/common/buf"
@@ -115,9 +114,8 @@ func (o *Outbound) Process(ctx context.Context, link *transport.Link, dialer int
 
 	newError("tunneling request to ", destination, " via ", o.serverAddr.NetAddr()).WriteToLog(session.ExportIDToError(ctx))
 
-	detachedCtx := core.ToBackgroundDetachedContext(ctx)
 	if destination.Network == net.Network_TCP {
-		serverConn, err := client.DialConn(detachedCtx, singbridge.ToSocksAddr(destination))
+		serverConn, err := client.DialConn(ctx, singbridge.ToSocksAddr(destination))
 		if err != nil {
 			return err
 		}
@@ -142,13 +140,13 @@ func (o *Outbound) Process(ctx context.Context, link *transport.Link, dialer int
 			return singbridge.ReturnError(err)
 		}
 
-		return singbridge.ReturnError(bufio.CopyConn(detachedCtx, singbridge.NewPipeConnWrapper(link), serverConn))
+		return singbridge.ReturnError(bufio.CopyConn(ctx, singbridge.NewPipeConnWrapper(link), serverConn))
 	} else {
-		serverConn, err := client.ListenPacket(detachedCtx, singbridge.ToSocksAddr(destination))
+		serverConn, err := client.ListenPacket(ctx, singbridge.ToSocksAddr(destination))
 		if err != nil {
 			return err
 		}
-		return singbridge.ReturnError(bufio.CopyPacketConn(detachedCtx, singbridge.NewPacketConnWrapper(link, destination), serverConn.(network.PacketConn)))
+		return singbridge.ReturnError(bufio.CopyPacketConn(ctx, singbridge.NewPacketConnWrapper(link, destination), serverConn.(network.PacketConn)))
 	}
 }
 

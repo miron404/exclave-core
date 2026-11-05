@@ -154,7 +154,7 @@ func (r *alpnAwareHTTPRoundTripperImpl) dialOrGetTLSWithExpectedALPN(ctx context
 
 	protocol := ""
 	if connAPLNGetter, ok := conn.(security.ConnectionApplicationProtocol); ok {
-		connectionALPN, err := connAPLNGetter.GetConnectionApplicationProtocol()
+		connectionALPN, err := connAPLNGetter.GetConnectionApplicationProtocol(ctx)
 		if err != nil {
 			return nil, newError("failed to get connection ALPN").Base(err).AtWarning()
 		}

@@ -27,8 +27,8 @@ func (c *Conn) Close() error {
 	return c.Conn.Close()
 }
 
-func (c *Conn) GetConnectionApplicationProtocol() (string, error) {
-	if err := c.Handshake(); err != nil {
+func (c *Conn) GetConnectionApplicationProtocol(ctx context.Context) (string, error) {
+	if err := c.HandshakeContext(ctx); err != nil {
 		return "", err
 	}
 	return c.ConnectionState().NegotiatedProtocol, nil

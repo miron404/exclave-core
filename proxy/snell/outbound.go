@@ -220,10 +220,8 @@ func (o *Outbound) Process(ctx context.Context, link *transport.Link, dialer int
 
 	newError("tunneling request to ", destination, " via ", o.serverAddr.NetAddr()).WriteToLog(session.ExportIDToError(ctx))
 
-	detachedCtx := core.ToBackgroundDetachedContext(ctx)
-
 	if destination.Network == v2net.Network_TCP {
-		serverConn, err := client.DialContext(detachedCtx, singbridge.ToSocksAddr(destination))
+		serverConn, err := client.DialContext(ctx, singbridge.ToSocksAddr(destination))
 		if err != nil {
 			return err
 		}
@@ -248,9 +246,9 @@ func (o *Outbound) Process(ctx context.Context, link *transport.Link, dialer int
 			return singbridge.ReturnError(err)
 		}
 
-		return singbridge.ReturnError(bufio.CopyConn(detachedCtx, singbridge.NewPipeConnWrapper(link), serverConn))
+		return singbridge.ReturnError(bufio.CopyConn(ctx, singbridge.NewPipeConnWrapper(link), serverConn))
 	} else {
-		rawConn, err := dialer.Dial(detachedCtx, o.serverAddr)
+		rawConn, err := dialer.Dial(ctx, o.serverAddr)
 		if err != nil {
 			return err
 		}
@@ -270,7 +268,7 @@ func (o *Outbound) Process(ctx context.Context, link *transport.Link, dialer int
 		if o.version == 4 {
 			serverConn = newServerConnWrapper(serverConn)
 		}
-		return singbridge.ReturnError(bufio.CopyPacketConn(detachedCtx, newPacketConnWrapper(link, destination, addr, o.resolver), serverConn))
+		return singbridge.ReturnError(bufio.CopyPacketConn(ctx, newPacketConnWrapper(link, destination, addr, o.resolver), serverConn))
 	}
 }
 

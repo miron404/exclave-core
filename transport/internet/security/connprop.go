@@ -1,5 +1,9 @@
 package security
 
+import (
+	"context"
+)
+
 type ConnectionApplicationProtocol interface {
-	GetConnectionApplicationProtocol() (string, error)
+	GetConnectionApplicationProtocol(ctx context.Context) (string, error)
 }

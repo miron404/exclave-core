@@ -10,6 +10,9 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/quic-go/quic-go/http3"
+	"golang.org/x/net/http2"
+
 	"github.com/exclavenetwork/exclave-core/v5/common"
 	"github.com/exclavenetwork/exclave-core/v5/common/buf"
 	"github.com/exclavenetwork/exclave-core/v5/common/net"
@@ -42,6 +45,18 @@ func (c *DefaultDialerClient) IsClosed() bool {
 	return c.closed.Load()
 }
 
+func (c *DefaultDialerClient) close() {
+	c.closed.Store(true)
+	switch transport := c.client.Transport.(type) {
+	case *http3.Transport:
+		transport.Close()
+	case *http2.Transport:
+		transport.CloseIdleConnections()
+	default:
+		c.client.CloseIdleConnections()
+	}
+}
+
 func (c *DefaultDialerClient) OpenStream(ctx context.Context, url, sessionId string, body io.Reader, uploadOnly bool) (io.ReadCloser, net.Addr, net.Addr, error) {
 	var remoteAddr, localAddr net.Addr
 	// this is done when the TCP/UDP connection to the server was established,
@@ -72,8 +87,7 @@ func (c *DefaultDialerClient) OpenStream(ctx context.Context, url, sessionId str
 		resp, respErr := c.client.Do(req)
 		if respErr != nil {
 			if !uploadOnly { // stream-down is enough
-				c.client.CloseIdleConnections()
-				c.closed.Store(true)
+				c.close()
 				newError("failed to " + method + " " + url).Base(respErr).AtInfo().WriteToLog(session.ExportIDToError(ctx))
 			}
 			gotConn.Close()
@@ -109,8 +123,7 @@ func (c *DefaultDialerClient) PostPacket(ctx context.Context, url, sessionId, se
 	if c.httpVersion != "1.1" {
 		resp, err := c.client.Do(req)
 		if err != nil {
-			c.client.CloseIdleConnections()
-			c.closed.Store(true)
+			c.close()
 			return err
 		}
 
@@ -150,8 +163,7 @@ func (c *DefaultDialerClient) PostPacket(ctx context.Context, url, sessionId, se
 				if h1UploadConn.UnreadedResponsesCount > 0 {
 					resp, err := http.ReadResponse(h1UploadConn.RespBufReader, req)
 					if err != nil {
-						c.client.CloseIdleConnections()
-						c.closed.Store(true)
+						c.close()
 						return fmt.Errorf("error while reading response: %s", err.Error())
 					}
 					io.Copy(io.Discard, resp.Body)

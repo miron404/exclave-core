@@ -1,14 +1,11 @@
 package track
 
-import (
-	"testing"
-	"time"
-)
+import "testing"
 
-type recorder struct{ deadline time.Time }
+type recorder struct{ closed bool }
 
-func (r *recorder) SetDeadline(t time.Time) error {
-	r.deadline = t
+func (r *recorder) Close() error {
+	r.closed = true
 	return nil
 }
 
@@ -26,11 +23,11 @@ func TestResetConnectionsResetsAll(t *testing.T) {
 
 	p.ResetConnections()
 	for i, c := range conns {
-		if c.deadline.IsZero() {
+		if !c.closed {
 			t.Fatalf("connection %d of %d was not reset", i, len(conns)+1)
 		}
 	}
-	if late.deadline.IsZero() {
+	if !late.closed {
 		t.Fatal("the last connection was not reset")
 	}
 	if n := p.list.Len(); n != 0 {

@@ -38,25 +38,18 @@ func (l *Listener) StreamHijacker(ft http3.FrameType, conn *quic.Conn, stream *u
 	// err always == nil
 
 	tcpConn := &HyConn{
-		stream: stream,
-		local:  conn.LocalAddr(),
-		remote: conn.RemoteAddr(),
+		stream:   stream,
+		IsServer: true,
 	}
 	l.addConn(tcpConn)
 	return true, nil
 }
 
 func (l *Listener) UDPHijacker(entry *hyServer.UdpSessionEntry, originalAddr string) {
-	addr, err := net.ResolveUDPAddr("udp", originalAddr)
-	if err != nil {
-		return
-	}
 	udpConn := &HyConn{
 		IsUDPExtension:   true,
 		IsServer:         true,
 		ServerUDPSession: entry,
-		remote:           addr,
-		local:            l.rawConn.LocalAddr(),
 	}
 	l.addConn(udpConn)
 }

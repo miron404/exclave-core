@@ -118,7 +118,7 @@ func (generator *TrafficGenerator) GenerateNextTraffic(ctx context.Context) erro
 	if !ok {
 		return newError("TLS connection does not support getting ALPN").AtWarning()
 	}
-	alpn, err := getAlpn.GetConnectionApplicationProtocol()
+	alpn, err := getAlpn.GetConnectionApplicationProtocol(ctx)
 	if err != nil {
 		return newError("failed to get ALPN from TLS connection").Base(err).AtWarning()
 	}

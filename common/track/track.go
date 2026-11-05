@@ -2,13 +2,9 @@ package track
 
 import (
 	"container/list"
+	"io"
 	"sync"
-	"time"
 )
-
-type deadlineSetter interface {
-	SetDeadline(t time.Time) error
-}
 
 type ConnectionPool struct {
 	mu   sync.Mutex
@@ -19,9 +15,9 @@ func NewConnectionPool() *ConnectionPool {
 	return new(ConnectionPool)
 }
 
-func (p *ConnectionPool) PushBack(deadlineSetter deadlineSetter) *list.Element {
+func (p *ConnectionPool) PushBack(closer io.Closer) *list.Element {
 	p.mu.Lock()
-	elem := p.list.PushBack(deadlineSetter)
+	elem := p.list.PushBack(closer)
 	p.mu.Unlock()
 	return elem
 }
@@ -34,18 +30,15 @@ func (p *ConnectionPool) Remove(elem *list.Element) {
 
 func (p *ConnectionPool) ResetConnections() {
 	p.mu.Lock()
-	deadlineSetters := make([]deadlineSetter, 0, p.list.Len())
-	// Removing an element clears its link to the next one, so the next has
-	// to be taken first, or only the first connection is ever reset.
+	closers := make([]io.Closer, 0, p.list.Len())
 	for elem := p.list.Front(); elem != nil; {
-		next := elem.Next()
-		deadlineSetters = append(deadlineSetters, elem.Value.(deadlineSetter))
+		nextElem := elem.Next()
+		closers = append(closers, elem.Value.(io.Closer))
 		_ = p.list.Remove(elem)
-		elem = next
+		elem = nextElem
 	}
 	p.mu.Unlock()
-	now := time.Now()
-	for _, deadlineSetter := range deadlineSetters {
-		deadlineSetter.SetDeadline(now)
+	for _, closer := range closers {
+		closer.Close()
 	}
 }

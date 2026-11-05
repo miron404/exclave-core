@@ -7,12 +7,11 @@ import (
 	"maps"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/apernet/quic-go"
-	"github.com/apernet/quic-go/quicvarint"
 	hyClient "github.com/exclavenetwork/hysteria/core/v2/client"
-	hyProtocol "github.com/exclavenetwork/hysteria/core/v2/international/protocol"
 	"github.com/exclavenetwork/hysteria/core/v2/international/utils"
 	"github.com/exclavenetwork/hysteria/extras/v2/obfs"
 	"github.com/exclavenetwork/hysteria/extras/v2/transport/udphop"
@@ -36,7 +35,8 @@ type lateInitHysteriaClient struct {
 	initMutex      sync.Mutex
 	clientMutex    sync.Mutex
 	client         hyClient.Client
-	closed         bool
+	supportUDP     bool
+	closed         atomic.Bool
 	ctx            context.Context
 	dest           net.Destination
 	streamSettings *internet.MemoryStreamConfig
@@ -47,7 +47,7 @@ func (c *lateInitHysteriaClient) init() error {
 	c.initMutex.Lock()
 	defer c.initMutex.Unlock()
 	c.clientMutex.Lock()
-	if c.closed {
+	if c.closed.Load() {
 		c.clientMutex.Unlock()
 		return newError("client closed")
 	}
@@ -56,17 +56,19 @@ func (c *lateInitHysteriaClient) init() error {
 		return nil
 	}
 	c.clientMutex.Unlock()
-	client, err := NewHyClient(c.ctx, c.dest, c.streamSettings, c.resolver)
+	client, supportUDP, err := NewHyClient(c.ctx, c.dest, c.streamSettings, c.resolver)
 	if err != nil {
 		return err
 	}
 	c.clientMutex.Lock()
-	defer c.clientMutex.Unlock()
-	if c.closed {
+	if c.closed.Load() {
+		c.clientMutex.Unlock()
 		client.Close()
 		return newError("client closed")
 	}
 	c.client = client
+	c.supportUDP = supportUDP
+	c.clientMutex.Unlock()
 	return nil
 }
 
@@ -81,15 +83,19 @@ func (c *lateInitHysteriaClient) UDP() (hyClient.HyUDPConn, error) {
 	if err := c.init(); err != nil {
 		return nil, err
 	}
+	if !c.supportUDP {
+		return nil, newError("server does not support UDP")
+	}
 	return c.client.UDP()
 }
 
 func (c *lateInitHysteriaClient) Close() error {
 	c.clientMutex.Lock()
-	defer c.clientMutex.Unlock()
-	c.closed = true
-	if c.client != nil {
-		return c.client.Close()
+	c.closed.Store(true)
+	client := c.client
+	c.clientMutex.Unlock()
+	if client != nil {
+		return client.Close()
 	}
 	return nil
 }
@@ -215,12 +221,12 @@ func (f *connFactory) New(addr net.Addr) (net.PacketConn, error) {
 	}
 }
 
-func NewHyClient(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig, resolver func(ctx context.Context, domain string) net.Address) (hyClient.Client, error) {
+func NewHyClient(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig, resolver func(ctx context.Context, domain string) net.Address) (hyClient.Client, bool, error) {
 	config := streamSettings.ProtocolSettings.(*Config)
 
 	tlsConfig, err := GetClientTLSConfig(ctx, dest, streamSettings)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	// workaround https://github.com/apernet/quic-go/blob/184d081eef3e9edd5cb7c0ddf2460c91f2e6adb1/internal/handshake/tls_conn_utls.go#L57-L63
@@ -273,7 +279,7 @@ func NewHyClient(ctx context.Context, dest net.Destination, streamSettings *inte
 
 	serverAddr, err := ResolveAddress(ctx, dest, resolver)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	hyConfig := &hyClient.Config{
@@ -306,27 +312,27 @@ func NewHyClient(ctx context.Context, dest net.Destination, streamSettings *inte
 		case "standard", "conservative", "aggressive":
 			congestionConfig.BBRProfile = congestion.BbrProfile
 		default:
-			return nil, newError("unknown congestion BBR profile: ", congestion.BbrProfile)
+			return nil, false, newError("unknown congestion BBR profile: ", congestion.BbrProfile)
 		}
 	case "reno":
 		congestionConfig.Type = "reno"
 	case "brutal":
 	default:
-		return nil, newError("unknown congestion type: ", congestion.Type)
+		return nil, false, newError("unknown congestion type: ", congestion.Type)
 	}
 	hyConfig.CongestionConfig = congestionConfig
 
 	if len(config.HopPorts) > 0 {
 		if config.HopPorts == "all" || config.HopPorts == "*" {
-			return nil, newError("invalid hopPorts")
+			return nil, false, newError("invalid hopPorts")
 		}
 		host, _, err := net.SplitHostPort(serverAddr.String())
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		udpHopAddr, err := udphop.ResolveUDPHopAddr(net.JoinHostPort(host, config.HopPorts))
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		hyConfig.ServerAddr = udpHopAddr
 	}
@@ -351,7 +357,7 @@ func NewHyClient(ctx context.Context, dest net.Destination, streamSettings *inte
 		var hopIntervalMin, hopIntervalMax time.Duration
 		if config.HopInterval > 0 {
 			if config.HopIntervalMin > 0 || config.HopIntervalMax > 0 {
-				return nil, newError("hopInterval conflicts with hopIntervalMin or hopIntervalMax")
+				return nil, false, newError("hopInterval conflicts with hopIntervalMin or hopIntervalMax")
 			}
 			hopIntervalMin = time.Duration(config.HopInterval) * time.Second
 			hopIntervalMax = time.Duration(config.HopInterval) * time.Second
@@ -389,27 +395,28 @@ func NewHyClient(ctx context.Context, dest net.Destination, streamSettings *inte
 			}
 		case "":
 		default:
-			return nil, newError("unknown obfs type: ", config.Obfs.Type)
+			return nil, false, newError("unknown obfs type: ", config.Obfs.Type)
 		}
 	}
 	hyConfig.ConnFactory = connFactory
 
-	client, _, err := hyClient.NewClient(hyConfig)
+	client, handshakeInfo, err := hyClient.NewClient(hyConfig)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
-	return client, nil
+	return client, handshakeInfo.UDPEnabled, nil
 }
 
 func CloseHyClient(state *transportConnectionState, dest net.Destination, streamSettings *internet.MemoryStreamConfig) error {
 	state.scopedDialerAccess.Lock()
-	defer state.scopedDialerAccess.Unlock()
-
 	client, found := state.scopedDialerMap[dialerConf{dest, streamSettings}]
 	if found {
 		delete(state.scopedDialerMap, dialerConf{dest, streamSettings})
-		return client.Close()
+	}
+	state.scopedDialerAccess.Unlock()
+	if found {
+		client.Close()
 	}
 	return nil
 }
@@ -436,7 +443,7 @@ func GetHyClient(ctx context.Context, dest net.Destination, streamSettings *inte
 		CloseHyClient(stateTyped, dest, streamSettings)
 	}
 	client, found := stateTyped.scopedDialerMap[dialerConf{dest, streamSettings}]
-	if found && !client.closed {
+	if found && !client.closed.Load() {
 		return client, canceller, nil
 	}
 	client = &lateInitHysteriaClient{
@@ -490,17 +497,20 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
 		}
 	}
 
-	conn := &HyConn{
-		local:  quicConn.LocalAddr(),
-		remote: quicConn.RemoteAddr(),
-	}
+	conn := &HyConn{}
 
 	network := net.Network_TCP
 	if outbound != nil {
 		network = outbound.Target.Network
 	}
 
-	if network == net.Network_UDP && config.GetUseUdpExtension() { // only hysteria2 can use udpExtension
+	if network == net.Network_UDP { // only hysteria2 can use udpExtension
+		if !config.GetUseUdpExtension() {
+			return nil, newError("UDP disabled")
+		}
+		if !client.supportUDP {
+			return nil, newError("server does not support UDP")
+		}
 		conn.IsUDPExtension = true
 		conn.IsServer = false
 		conn.ClientUDPSession, err = client.UDP()
@@ -513,17 +523,10 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
 
 	conn.stream, err = client.OpenStream()
 	if err != nil {
+		canceller()
 		return nil, err
 	}
 
-	// write TCP frame type
-	frameSize := quicvarint.Len(hyProtocol.FrameTypeTCPRequest)
-	buf := make([]byte, frameSize)
-	hyProtocol.VarintPut(buf, hyProtocol.FrameTypeTCPRequest)
-	_, err = conn.stream.Write(buf)
-	if err != nil {
-		return nil, err
-	}
 	return conn, nil
 }
 

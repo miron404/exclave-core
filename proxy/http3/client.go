@@ -42,7 +42,7 @@ type Client struct {
 	policyManager policy.Manager
 	quicConfig    *quic.Config
 	transport     *http3.Transport
-	cachedConn    atomic.Pointer[http3.ClientConn]
+	cachedConn    atomic.Pointer[http3ClientConn]
 	createLock    sync.Mutex
 	connectUDP    bool
 	uriTemplate   *uritemplate.Template
@@ -62,9 +62,19 @@ func (c *Client) Close() error {
 	c.ctxLock.Unlock()
 	cachedConn := c.cachedConn.Swap(nil)
 	if cachedConn != nil {
-		cachedConn.CloseWithError(0, "")
+		cachedConn.close()
 	}
 	return nil
+}
+
+type http3ClientConn struct {
+	*http3.ClientConn
+	rawConn net.Conn
+}
+
+func (c *http3ClientConn) close() {
+	c.CloseWithError(0, "")
+	c.rawConn.Close()
 }
 
 func NewClient(ctx context.Context, config *ClientConfig) (*Client, error) {
@@ -228,7 +238,7 @@ func (c *Client) setupHTTPTunnel(ctx context.Context, target net.Destination, di
 	if clientConn != nil {
 		select {
 		case <-clientConn.Context().Done():
-			clientConn.CloseWithError(0, "")
+			clientConn.close()
 			clientConn = nil
 		default:
 		}
@@ -250,7 +260,10 @@ func (c *Client) setupHTTPTunnel(ctx context.Context, target net.Destination, di
 			c.createLock.Unlock()
 			return nil, err
 		}
-		clientConn = c.transport.NewClientConn(quicConn)
+		clientConn = &http3ClientConn{
+			ClientConn: c.transport.NewClientConn(quicConn),
+			rawConn:    rawConn,
+		}
 		c.cachedConn.Store(clientConn)
 	}
 	c.createLock.Unlock()
@@ -258,7 +271,7 @@ func (c *Client) setupHTTPTunnel(ctx context.Context, target net.Destination, di
 	select {
 	case <-clientConn.ReceivedSettings():
 	case <-clientConn.Context().Done():
-		clientConn.CloseWithError(0, "")
+		clientConn.close()
 		return nil, clientConn.Context().Err()
 	}
 
@@ -268,7 +281,7 @@ func (c *Client) setupHTTPTunnel(ctx context.Context, target net.Destination, di
 
 	stream, err := clientConn.OpenRequestStream(ctx)
 	if err != nil {
-		clientConn.CloseWithError(0, "")
+		clientConn.close()
 		return nil, err
 	}
 
@@ -322,7 +335,7 @@ func (c *Client) setupHTTPTunnel(ctx context.Context, target net.Destination, di
 		if err := stream.SendRequestHeader(req); err != nil {
 			stream.CancelRead(0)
 			stream.Close()
-			clientConn.CloseWithError(0, "")
+			clientConn.close()
 			return nil, err
 		}
 		var wg sync.WaitGroup
@@ -334,7 +347,7 @@ func (c *Client) setupHTTPTunnel(ctx context.Context, target net.Destination, di
 		if err != nil {
 			stream.CancelRead(0)
 			stream.Close()
-			clientConn.CloseWithError(0, "")
+			clientConn.close()
 			return nil, err
 		}
 		wg.Wait()
@@ -342,7 +355,7 @@ func (c *Client) setupHTTPTunnel(ctx context.Context, target net.Destination, di
 			resp.Body.Close()
 			stream.CancelRead(0)
 			stream.Close()
-			clientConn.CloseWithError(0, "")
+			clientConn.close()
 			return nil, pErr
 		}
 		if resp.StatusCode < 200 || resp.StatusCode > 299 {

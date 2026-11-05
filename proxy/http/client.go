@@ -69,8 +69,11 @@ func (c *Client) Close() error {
 	clear(c.cachedH2Conns)
 	c.cachedH2Mutex.Unlock()
 	for _, cachedH2Conn := range cachedH2Conns {
-		for elem := cachedH2Conn.Front(); elem != nil; elem = elem.Next() {
-			_ = elem.Value.(*http2ClientConn).Close()
+		for elem := cachedH2Conn.Front(); elem != nil; {
+			nextElem := elem.Next()
+			elem.Value.(*http2ClientConn).close()
+			cachedH2Conn.Remove(elem)
+			elem = nextElem
 		}
 	}
 	return nil
@@ -356,7 +359,7 @@ func (c *Client) setupHTTPTunnel(ctx context.Context, dest net.Destination, targ
 		return rawConn, nil, nil
 	}
 
-	connectHTTP2 := func(h2clientConn *http2ClientConn) (net.Conn, bool, error) {
+	connectHTTP2 := func(clientConn *http2ClientConn) (net.Conn, bool, error) {
 		if target.Network != net.Network_TCP {
 			req.Header.Set(":protocol", "connect-udp")
 			req.Header.Set("capsule-protocol", "?1")
@@ -409,7 +412,7 @@ func (c *Client) setupHTTPTunnel(ctx context.Context, dest net.Destination, targ
 			}
 			wg.Done()
 		}()
-		resp, err := h2clientConn.RoundTrip(req) // nolint: bodyclose
+		resp, err := clientConn.RoundTrip(req) // nolint: bodyclose
 		if err != nil {
 			if strings.Contains(err.Error(), "extended connect not supported") {
 				return nil, false, newError("extended connect not supported")
@@ -436,16 +439,16 @@ func (c *Client) setupHTTPTunnel(ctx context.Context, dest net.Destination, targ
 	c.cachedH2Mutex.Unlock()
 
 	if elem != nil {
-		h2ClientConn := elem.Value.(*http2ClientConn)
-		if h2ClientConn.CanTakeNewRequest() {
-			proxyConn, shouldClose, err := connectHTTP2(h2ClientConn)
+		clientConn := elem.Value.(*http2ClientConn)
+		if clientConn.CanTakeNewRequest() {
+			proxyConn, shouldClose, err := connectHTTP2(clientConn)
 			if shouldClose {
 				c.cachedH2Mutex.Lock()
 				if _, found := c.cachedH2Conns[dest]; found {
 					c.cachedH2Conns[dest].Remove(elem)
 				}
 				c.cachedH2Mutex.Unlock()
-				h2ClientConn.Close()
+				clientConn.close()
 			}
 			if err != nil {
 				return nil, nil, err
@@ -457,7 +460,7 @@ func (c *Client) setupHTTPTunnel(ctx context.Context, dest net.Destination, targ
 				c.cachedH2Conns[dest].Remove(elem)
 			}
 			c.cachedH2Mutex.Unlock()
-			h2ClientConn.Close()
+			clientConn.close()
 		}
 	}
 
@@ -482,7 +485,7 @@ func (c *Client) setupHTTPTunnel(ctx context.Context, dest net.Destination, targ
 	var isTLS bool
 	if connALPNGetter, ok := iConn.(security.ConnectionApplicationProtocol); ok {
 		isTLS = true
-		nextProto, err = connALPNGetter.GetConnectionApplicationProtocol()
+		nextProto, err = connALPNGetter.GetConnectionApplicationProtocol(ctx)
 		if err != nil {
 			rawConn.Close()
 			return nil, nil, err
@@ -507,17 +510,16 @@ func (c *Client) setupHTTPTunnel(ctx context.Context, dest net.Destination, targ
 			rawConn.Close()
 			return nil, nil, err
 		}
-		h2ClientConn := newH2ClientConn(cc)
+		clientConn := newH2ClientConn(cc, rawConn)
 		c.cachedH2Mutex.Lock()
 		if _, found := c.cachedH2Conns[dest]; !found {
 			c.cachedH2Conns[dest] = &list.List{}
 		}
-		c.cachedH2Conns[dest].PushFront(h2ClientConn)
+		c.cachedH2Conns[dest].PushFront(clientConn)
 		c.cachedH2Mutex.Unlock()
-		proxyConn, shouldClose, err := connectHTTP2(h2ClientConn)
+		proxyConn, shouldClose, err := connectHTTP2(clientConn)
 		if shouldClose {
-			h2ClientConn.Close()
-			rawConn.Close()
+			clientConn.close()
 		}
 		if err != nil {
 			return nil, nil, err

@@ -3,6 +3,7 @@
 package masque
 
 import (
+	"net"
 	"net/http"
 	"reflect"
 	"sync"
@@ -31,6 +32,7 @@ var (
 
 type http2ClientConn struct {
 	*http2.ClientConn
+	rawConn        net.Conn
 	initOffsetOnce sync.Once
 	cc             *http.ClientConn
 	mu             *sync.Mutex
@@ -46,10 +48,16 @@ type http2ClientConn struct {
 	roundTripper   http.RoundTripper
 }
 
-func newH2ClientConn(clientConn *http2.ClientConn) *http2ClientConn {
+func newH2ClientConn(clientConn *http2.ClientConn, rawConn net.Conn) *http2ClientConn {
 	return &http2ClientConn{
 		ClientConn: clientConn,
+		rawConn:    rawConn,
 	}
+}
+
+func (c *http2ClientConn) close() {
+	c.Close()
+	c.rawConn.Close()
 }
 
 func (c *http2ClientConn) initOffset() {

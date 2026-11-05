@@ -164,11 +164,6 @@ func SniffTLS(b []byte) (*SniffHeader, error) {
 		return nil, errNotTLS
 	}
 	headerLen := int(binary.BigEndian.Uint16(b[3:5]))
-	if headerLen == 0 || headerLen >= 16384 {
-		// Implementations MUST NOT send zero-length fragments
-		// The length MUST NOT exceed 2^14
-		return nil, errNotTLS
-	}
 
 	h := &SniffHeader{}
 	data := buf.NewWithSize(32767)

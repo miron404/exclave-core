@@ -121,7 +121,9 @@ func (h *requestHandler) ServeHTTP(writer http.ResponseWriter, request *http.Req
 
 	h.config.ApplyXPaddingToResponse(writer, xPaddingConfig)
 
-	if request.Method == "OPTIONS" {
+	// A real CORS preflight always carries Access-Control-Request-Method. An OPTIONS request without it is an
+	// uplink request (uplinkHTTPMethod: "OPTIONS") and must go through the normal handling below.
+	if request.Method == "OPTIONS" && request.Header.Get("Access-Control-Request-Method") != "" {
 		writer.WriteHeader(http.StatusOK)
 		return
 	}
@@ -129,18 +131,17 @@ func (h *requestHandler) ServeHTTP(writer http.ResponseWriter, request *http.Req
 	sessionId, seqStr := h.config.ExtractMetaFromRequest(request, h.path)
 
 	var remoteAddr net.Addr
-	var err error
-	remoteAddr, err = net.ResolveTCPAddr("tcp", request.RemoteAddr)
-	if err != nil {
-		remoteAddr = &net.TCPAddr{
-			IP:   net.AnyIP.IP(),
-			Port: 0,
+	if dest, err := net.ParseDestination(request.RemoteAddr); err == nil {
+		if request.ProtoMajor == 3 {
+			remoteAddr = &net.UDPAddr{IP: dest.Address.IP(), Port: int(dest.Port)}
+		} else {
+			remoteAddr = &net.TCPAddr{IP: dest.Address.IP(), Port: int(dest.Port)}
 		}
-	}
-	if request.ProtoMajor == 3 {
-		remoteAddr = &net.UDPAddr{
-			IP:   remoteAddr.(*net.TCPAddr).IP,
-			Port: remoteAddr.(*net.TCPAddr).Port,
+	} else {
+		if request.ProtoMajor == 3 {
+			remoteAddr = &net.UDPAddr{IP: net.AnyIP.IP(), Port: 0}
+		} else {
+			remoteAddr = &net.TCPAddr{IP: net.AnyIP.IP(), Port: 0}
 		}
 	}
 	forwardedAddrs := http_proto.ParseXForwardedFor(request.Header)
@@ -174,7 +175,7 @@ func (h *requestHandler) ServeHTTP(writer http.ResponseWriter, request *http.Req
 				Reader:         request.Body,
 				ResponseWriter: writer,
 			}
-			err = currentSession.uploadQueue.Push(Packet{
+			err := currentSession.uploadQueue.Push(Packet{
 				Reader: httpSC,
 			})
 			if err != nil {
@@ -205,6 +206,7 @@ func (h *requestHandler) ServeHTTP(writer http.ResponseWriter, request *http.Req
 				headerPayloadChunks = append(headerPayloadChunks, chunk)
 			}
 			headerPayloadEncoded := strings.Join(headerPayloadChunks, "")
+			var err error
 			headerPayload, err = base64.RawURLEncoding.DecodeString(headerPayloadEncoded)
 			if err != nil {
 				newError("Invalid base64 in header's payload").Base(err).AtInfo().WriteToLog()
@@ -225,6 +227,7 @@ func (h *requestHandler) ServeHTTP(writer http.ResponseWriter, request *http.Req
 				}
 			}
 			cookiePayloadEncoded := strings.Join(cookiePayloadChunks, "")
+			var err error
 			cookiePayload, err = base64.RawURLEncoding.DecodeString(cookiePayloadEncoded)
 			if err != nil {
 				newError("Invalid base64 in cookies' payload").Base(err).AtInfo().WriteToLog()
@@ -243,7 +246,7 @@ func (h *requestHandler) ServeHTTP(writer http.ResponseWriter, request *http.Req
 				bodyPayload, readErr = buf.ReadAllToBytes(request.Body)
 			}
 			if readErr != nil {
-				newError("failed to read body payload").Base(err).AtInfo().WriteToLog()
+				newError("failed to read body payload").Base(readErr).AtInfo().WriteToLog()
 				writer.WriteHeader(http.StatusBadRequest)
 				return
 			}

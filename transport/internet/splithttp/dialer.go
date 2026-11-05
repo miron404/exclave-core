@@ -71,7 +71,7 @@ func (t *transportConnectionState) Close() error {
 	for _, manager := range managers {
 		for _, client := range manager.xmuxClients {
 			if c, ok := client.XmuxConn.(*DefaultDialerClient); ok && !c.closed.Load() {
-				c.client.CloseIdleConnections()
+				c.close()
 			}
 		}
 	}

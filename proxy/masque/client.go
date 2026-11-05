@@ -57,7 +57,7 @@ type Client struct {
 	createLock    sync.Mutex
 	tunnel        atomic.Pointer[tunnel]
 	h2ClientConn  atomic.Pointer[http2ClientConn]
-	h3ClientConn  atomic.Pointer[http3.ClientConn]
+	h3ClientConn  atomic.Pointer[http3ClientConn]
 }
 
 func (c *Client) Close() error {
@@ -72,10 +72,10 @@ func (c *Client) Close() error {
 		tunnel.close()
 	}
 	if h2ClientConn != nil {
-		h2ClientConn.Close()
+		h2ClientConn.close()
 	}
 	if h3ClientConn != nil {
-		h3ClientConn.CloseWithError(0, "")
+		h3ClientConn.close()
 	}
 	return nil
 }
@@ -150,7 +150,7 @@ func (c *Client) Process(ctx context.Context, link *transport.Link, dialer inter
 	}
 	dest := ob.Target
 
-	tunnel, err := c.getTunnel(core.ToBackgroundDetachedContext(ctx), dialer)
+	tunnel, err := c.getTunnel(ctx, dialer)
 	if err != nil {
 		return err
 	}
@@ -231,8 +231,9 @@ func (c *Client) getTunnel(ctx context.Context, dialer internet.Dialer) (*tunnel
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	c.ctxLock.Lock()
-	stop := context.AfterFunc(c.ctx, cancel)
+	clientCtx := c.ctx
 	c.ctxLock.Unlock()
+	stop := context.AfterFunc(clientCtx, cancel)
 	defer stop()
 	var (
 		conn *connectip.Conn
@@ -290,8 +291,8 @@ func (c *Client) getTunnel(ctx context.Context, dialer internet.Dialer) (*tunnel
 		return nil, err
 	}
 	c.tunnel.Store(tunnel)
-	go tunnel.serveAddressRequests(ctx, connectipConn)
-	go c.serveAddressAssignments(ctx, connectipConn, tunnel, localAddresses)
+	go tunnel.serveAddressRequests(clientCtx, connectipConn)
+	go c.serveAddressAssignments(clientCtx, connectipConn, tunnel, localAddresses)
 	return tunnel, nil
 }
 
@@ -317,7 +318,7 @@ func (c *Client) dialH1H2(ctx context.Context, dialer internet.Dialer) (*connect
 		h2ClientConn = cacheH2ClientConn
 	} else {
 		if cacheH2ClientConn != nil && !cacheH2ClientConn.CanTakeNewRequest() {
-			cacheH2ClientConn.Close()
+			cacheH2ClientConn.close()
 		}
 		rawConn, err = dialer.Dial(ctx, c.serverAddr)
 		if err != nil {
@@ -330,7 +331,7 @@ func (c *Client) dialH1H2(ctx context.Context, dialer internet.Dialer) (*connect
 		nextProto := ""
 		if connALPNGetter, ok := iConn.(security.ConnectionApplicationProtocol); ok {
 			isTLS = true
-			nextProto, err = connALPNGetter.GetConnectionApplicationProtocol()
+			nextProto, err = connALPNGetter.GetConnectionApplicationProtocol(ctx)
 			if err != nil {
 				rawConn.Close()
 				return nil, nil, err
@@ -343,7 +344,7 @@ func (c *Client) dialH1H2(ctx context.Context, dialer internet.Dialer) (*connect
 				rawConn.Close()
 				return nil, nil, err
 			}
-			h2ClientConn = newH2ClientConn(cc)
+			h2ClientConn = newH2ClientConn(cc, rawConn)
 			c.h2ClientConn.Store(h2ClientConn)
 		case "http/1.1", "":
 		default:
@@ -377,10 +378,7 @@ func (c *Client) dialH1H2(ctx context.Context, dialer internet.Dialer) (*connect
 	if h2ClientConn != nil {
 		conn, resp, err := connectip.NewHTTP2ClientConn(h2ClientConn).Dial(req) // nolint: bodyclose
 		if err != nil {
-			h2ClientConn.Close()
-			if rawConn != nil {
-				rawConn.Close()
-			}
+			h2ClientConn.close()
 			return nil, nil, err
 		}
 		return conn, resp, nil
@@ -396,7 +394,7 @@ func (c *Client) dialH1H2(ctx context.Context, dialer internet.Dialer) (*connect
 
 func (c *Client) dialH3(ctx context.Context, dialer internet.Dialer) (*connectip.Conn, *http.Response, error) {
 	var (
-		h3ClientConn *http3.ClientConn
+		h3ClientConn *http3ClientConn
 		rawConn      net.Conn
 		err          error
 	)
@@ -413,7 +411,7 @@ func (c *Client) dialH3(ctx context.Context, dialer internet.Dialer) (*connectip
 		h3ClientConn = cacheH3ClientConn
 	} else {
 		if cacheH3ClientConn != nil && !canTakeNewRequest {
-			cacheH3ClientConn.CloseWithError(0, "")
+			cacheH3ClientConn.close()
 		}
 		handler, ok := dialer.(*outbound.Handler)
 		if !ok {
@@ -449,7 +447,10 @@ func (c *Client) dialH3(ctx context.Context, dialer internet.Dialer) (*connectip
 			rawConn.Close()
 			return nil, nil, err
 		}
-		h3ClientConn = c.h3Transport.NewClientConn(quicConn)
+		h3ClientConn = &http3ClientConn{
+			ClientConn: c.h3Transport.NewClientConn(quicConn),
+			rawConn:    rawConn,
+		}
 		c.h3ClientConn.Store(h3ClientConn)
 	}
 	req, err := connectip.NewRequest(ctx, c.reqURL)
@@ -462,12 +463,9 @@ func (c *Client) dialH3(ctx context.Context, dialer internet.Dialer) (*connectip
 	for key, value := range c.config.GetHeaders() {
 		req.Header().Set(key, value)
 	}
-	conn, resp, err := connectip.NewClientConn(h3ClientConn).Dial(req) // nolint: bodyclose
+	conn, resp, err := connectip.NewClientConn(h3ClientConn.ClientConn).Dial(req) // nolint: bodyclose
 	if err != nil {
-		h3ClientConn.CloseWithError(0, "")
-		if rawConn != nil {
-			rawConn.Close()
-		}
+		h3ClientConn.close()
 		return nil, nil, err
 	}
 	return conn, resp, nil

@@ -123,7 +123,7 @@ func getHTTPClient(ctx context.Context, dest net.Destination, securityEngine *se
 
 			protocol := ""
 			if connAPLNGetter, ok := cn.(security.ConnectionApplicationProtocol); ok {
-				connectionALPN, err := connAPLNGetter.GetConnectionApplicationProtocol()
+				connectionALPN, err := connAPLNGetter.GetConnectionApplicationProtocol(detachedContext)
 				if err != nil {
 					cn.Close()
 					return nil, newError("failed to get connection ALPN").Base(err).AtWarning()

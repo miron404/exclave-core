@@ -176,7 +176,9 @@ func (r *parametersRecorder) SupportsSchemas(schema string) bool {
 }
 func (r *parametersRecorder) Close() error { return nil }
 func (r *parametersRecorder) RecordEvent(event qlogwriter.Event) {
-	if params, ok := event.(qlog.ParametersSet); ok && params.Initiator == qlog.InitiatorRemote && !params.Restore {
+	// Restored 0-RTT parameters arrive as a ParametersRestored event of their
+	// own, so a ParametersSet from the remote is always what it just sent.
+	if params, ok := event.(qlog.ParametersSet); ok && params.Initiator == qlog.InitiatorRemote {
 		r.once.Do(func() { r.received <- params })
 	}
 }

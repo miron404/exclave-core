@@ -4,12 +4,23 @@ import (
 	"syscall"
 
 	"github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/net/ipv4"
 
 	"github.com/exclavenetwork/exclave-core/v5/common/net"
 	"github.com/exclavenetwork/exclave-core/v5/features/stats"
 	"github.com/exclavenetwork/exclave-core/v5/transport/internet"
 )
+
+type http3ClientConn struct {
+	*http3.ClientConn
+	rawConn net.Conn
+}
+
+func (c *http3ClientConn) close() {
+	c.CloseWithError(0, "")
+	c.rawConn.Close()
+}
 
 var (
 	_ net.PacketConn            = (*statCounterConn)(nil)
