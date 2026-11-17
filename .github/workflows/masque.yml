@@ -17,6 +17,7 @@ on:
     branches:
       - masque
     paths:
+      - "common/speedtest/**"
       - "proxy/warpmasque/**"
       - "proxy/masque/**"
       - "proxy/wireguard/netstack/**"
@@ -46,10 +47,10 @@ jobs:
           cache-dependency-path: ./go.sum
 
       - name: Vet
-        run: go vet ./proxy/warpmasque/... ./proxy/masque/... ./proxy/wireguard/netstack/... ./proxy/loopback/... ./proxy/http/... ./transport/internet/
+        run: go vet ./common/speedtest/... ./proxy/warpmasque/... ./proxy/masque/... ./proxy/wireguard/netstack/... ./proxy/loopback/... ./proxy/http/... ./transport/internet/
 
       - name: Run tests
-        run: go test -race -count=1 ./proxy/warpmasque/... ./proxy/masque/... ./proxy/wireguard/netstack/... ./proxy/loopback/... ./proxy/http/... ./transport/internet/ ./infra/conf/v4/...
+        run: go test -race -count=1 ./common/speedtest/... ./proxy/warpmasque/... ./proxy/masque/... ./proxy/wireguard/netstack/... ./proxy/loopback/... ./proxy/http/... ./transport/internet/ ./infra/conf/v4/...
 
       - name: Build for Android
         env:

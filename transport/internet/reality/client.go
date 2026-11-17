@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/hmac"
+	"crypto/mldsa"
 	"crypto/sha512"
 	"crypto/tls"
 	"crypto/x509"
@@ -36,13 +37,13 @@ func client(ctx context.Context, conn net.Conn, dest net.Destination, config *Co
 			serverName = dest.Address.IP().String()
 		}
 	}
-	var mldsaVerify *mldsaVerify
+	var mldsaPublicKey *mldsa.PublicKey
 	if len(config.Mldsa65Verify) > 0 {
-		verify, err := newMLDSA65Verify(config.Mldsa65Verify)
+		publicKey, err := mldsa.NewPublicKey(mldsa.MLDSA65(), config.Mldsa65Verify)
 		if err != nil {
 			return nil, err
 		}
-		mldsaVerify = verify
+		mldsaPublicKey = publicKey
 	}
 	verified := false
 	realityConfig := &reality.Config{
@@ -56,37 +57,20 @@ func client(ctx context.Context, conn net.Conn, dest net.Destination, config *Co
 		},
 		VerifyConnection: func(state reality.ConnectionState) error {
 			if publicKey, ok := state.PeerCertificates[0].PublicKey.(ed25519.PublicKey); ok {
-				authKey, err := state.RealityAuthKey()
-				if err != nil {
-					return err
-				}
+				authKey, _ := state.RealityAuthKey()
 				h := hmac.New(sha512.New, authKey)
-				_, err = h.Write(publicKey)
-				if err != nil {
-					return err
-				}
+				h.Write(publicKey)
 				if bytes.Equal(h.Sum(nil), state.PeerCertificates[0].Signature) {
-					if mldsaVerify != nil {
+					if mldsaPublicKey != nil {
 						if len(state.PeerCertificates[0].Extensions) > 0 {
-							clientHello, err := state.RawClientHello()
-							if err != nil {
-								return err
+							clientHello, _ := state.RawClientHello()
+							serverHello, _ := state.RawServerHello()
+							h.Write(clientHello)
+							h.Write(serverHello)
+							if err := mldsa.Verify(mldsaPublicKey, h.Sum(nil), state.PeerCertificates[0].Extensions[0].Value, nil); err == nil {
+								verified = true
+								return nil
 							}
-							serverHello, err := state.RawServerHello()
-							if err != nil {
-								return err
-							}
-							if _, err = h.Write(clientHello); err != nil {
-								return err
-							}
-							if _, err = h.Write(serverHello); err != nil {
-								return err
-							}
-							if err := mldsaVerify.verify(h.Sum(nil), state.PeerCertificates[0].Extensions[0].Value); err != nil {
-								return err
-							}
-							verified = true
-							return nil
 						}
 					} else {
 						verified = true
