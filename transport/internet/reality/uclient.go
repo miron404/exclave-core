@@ -149,10 +149,12 @@ func uclient(ctx context.Context, conn net.Conn, dest net.Destination, config *C
 	hello := uConn.HandshakeState.Hello
 	hello.SessionId = make([]byte, 32)
 	copy(hello.Raw[39:], hello.SessionId) // the fixed location of `Session ID`
-	hello.SessionId[0] = 25               // Version_x
-	hello.SessionId[1] = 5                // Version_y
-	hello.SessionId[2] = 16               // Version_z
-	hello.SessionId[3] = 0                // reserved
+	version, err := ParseClientVersion(config.Version)
+	if err != nil {
+		return nil, err
+	}
+	copy(hello.SessionId[:3], version[:])
+	hello.SessionId[3] = 0 // reserved
 	binary.BigEndian.PutUint32(hello.SessionId[4:], uint32(time.Now().Unix()))
 	copy(hello.SessionId[8:], config.ShortId)
 	publicKey, err := ecdh.X25519().NewPublicKey(config.PublicKey)

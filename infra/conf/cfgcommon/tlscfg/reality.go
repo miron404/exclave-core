@@ -113,6 +113,10 @@ func (c *REALITYConfig) Build() (proto.Message, error) {
 			}
 		}
 	} else {
+		if _, err := reality.ParseClientVersion(c.Version); err != nil {
+			return nil, err
+		}
+		config.Version = c.Version
 		config.Fingerprint = strings.ToLower(c.Fingerprint)
 		if len(c.ServerNames) != 0 {
 			return nil, newError(`non-empty "serverNames", please use "serverName" instead`)

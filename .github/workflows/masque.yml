@@ -18,6 +18,8 @@ on:
       - masque
     paths:
       - "common/speedtest/**"
+      - "transport/internet/reality/**"
+      - "infra/conf/cfgcommon/tlscfg/**"
       - "proxy/warpmasque/**"
       - "proxy/masque/**"
       - "proxy/wireguard/netstack/**"
@@ -47,10 +49,10 @@ jobs:
           cache-dependency-path: ./go.sum
 
       - name: Vet
-        run: go vet ./common/speedtest/... ./proxy/warpmasque/... ./proxy/masque/... ./proxy/wireguard/netstack/... ./proxy/loopback/... ./proxy/http/... ./transport/internet/
+        run: go vet ./common/speedtest/... ./proxy/warpmasque/... ./proxy/masque/... ./proxy/wireguard/netstack/... ./proxy/loopback/... ./proxy/http/... ./transport/internet/ ./transport/internet/reality/... ./infra/conf/cfgcommon/tlscfg/...
 
       - name: Run tests
-        run: go test -race -count=1 ./common/speedtest/... ./proxy/warpmasque/... ./proxy/masque/... ./proxy/wireguard/netstack/... ./proxy/loopback/... ./proxy/http/... ./transport/internet/ ./infra/conf/v4/...
+        run: go test -race -count=1 ./common/speedtest/... ./proxy/warpmasque/... ./proxy/masque/... ./proxy/wireguard/netstack/... ./proxy/loopback/... ./proxy/http/... ./transport/internet/ ./transport/internet/reality/... ./infra/conf/cfgcommon/tlscfg/... ./infra/conf/v4/...
 
       - name: Build for Android
         env:

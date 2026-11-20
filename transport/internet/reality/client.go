@@ -45,6 +45,10 @@ func client(ctx context.Context, conn net.Conn, dest net.Destination, config *Co
 		}
 		mldsaPublicKey = publicKey
 	}
+	version, err := ParseClientVersion(config.Version)
+	if err != nil {
+		return nil, err
+	}
 	verified := false
 	realityConfig := &reality.Config{
 		ServerName:             serverName,
@@ -53,7 +57,7 @@ func client(ctx context.Context, conn net.Conn, dest net.Destination, config *Co
 		RealityClientConfig: reality.RealityClientConfig{
 			PublicKey:     config.PublicKey,
 			ShortId:       [8]byte(config.ShortId),
-			ClientVersion: [3]byte{25, 5, 16},
+			ClientVersion: version,
 		},
 		VerifyConnection: func(state reality.ConnectionState) error {
 			if publicKey, ok := state.PeerCertificates[0].PublicKey.(ed25519.PublicKey); ok {
